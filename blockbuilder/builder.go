@@ -26,8 +26,10 @@ type Builder struct {
 	mempool *mempool.Mempool
 }
 
-func New(mempool *mempool.Mempool) *Builder {
+func New(chain *blockchain.Blockchain, starknetVM vm.VM,mempool *mempool.Mempool) *Builder {
 	return &Builder{
+		chain: chain,
+		starknetVM: starknetVM,
 		mempool: mempool,
 	}
 }

@@ -105,11 +105,11 @@ func New(cfg *Config, version string) (*Node, error) { //nolint:gocyclo,funlen
 
 	services := make([]service.Service, 0)
 
-	txnpool := mempool.New()
-	blockbuilder:= blockbuilder.New(txnpool)
+	chain := blockchain.New(database, cfg.Network, log)
+
+	blockbuilder:= blockbuilder.New(chain,vm.New(log), mempool.New())
 	services = append(services, blockbuilder)
 
-	chain := blockchain.New(database, cfg.Network, log)
 	feederClientTimeout := 5 * time.Second
 	client := feeder.NewClient(cfg.Network.FeederURL()).WithUserAgent(ua).WithLogger(log).WithTimeout(feederClientTimeout)
 	synchronizer := sync.New(chain, adaptfeeder.New(client), log, cfg.PendingPollInterval)

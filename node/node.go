@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/NethermindEth/juno/blockbuilder"
 	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/clients/feeder"
 	"github.com/NethermindEth/juno/clients/gateway"
@@ -17,6 +18,7 @@ import (
 	"github.com/NethermindEth/juno/db/pebble"
 	"github.com/NethermindEth/juno/jsonrpc"
 	"github.com/NethermindEth/juno/l1"
+	"github.com/NethermindEth/juno/mempool"
 	"github.com/NethermindEth/juno/migration"
 	"github.com/NethermindEth/juno/p2p"
 	"github.com/NethermindEth/juno/rpc"
@@ -102,6 +104,10 @@ func New(cfg *Config, version string) (*Node, error) { //nolint:gocyclo,funlen
 	ua := fmt.Sprintf("Juno/%s Starknet Client", version)
 
 	services := make([]service.Service, 0)
+
+	txnpool := mempool.New()
+	blockbuilder:= blockbuilder.New(txnpool)
+	services = append(services, blockbuilder)
 
 	chain := blockchain.New(database, cfg.Network, log)
 	feederClientTimeout := 5 * time.Second

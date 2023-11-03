@@ -11,6 +11,7 @@ import (
 	stdsync "sync"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/NethermindEth/juno/blockbuilder"
 	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/clients/feeder"
 	"github.com/NethermindEth/juno/clients/gateway"
@@ -78,6 +79,7 @@ type traceCacheKey struct {
 
 type Handler struct {
 	bcReader      blockchain.Reader
+	Builder blockbuilder.Builder
 	syncReader    sync.Reader
 	network       utils.Network
 	gatewayClient Gateway
@@ -1030,18 +1032,17 @@ func (h *Handler) AddTransaction(txnJSON json.RawMessage) (*AddTxResponse, *json
 		txnJSON = updatedReq
 	}
 
-	resp, err := h.gatewayClient.AddTransaction(txnJSON)
-	if err != nil {
-		return nil, makeJSONErrorFromGatewayError(err)
-	}
 
-	var response AddTxResponse
-	err = json.Unmarshal(resp, &response)
-	if err != nil {
-		return nil, jsonrpc.Err(jsonrpc.InternalError, err.Error())
+	// NOTE: For POC, we do not relay the transaction.
+	var coreTxn core.Transaction
+	if json.Unmarshal(txnJSON, &coreTxn)!=nil{
+		return nil, jsonrpc.Err(jsonrpc.InternalError, err)
 	}
-
-	return &response, nil
+	if h.Builder.ProcessTxn(&coreTxn)!=nil{
+		return nil, jsonrpc.Err(jsonrpc.InternalError,err)
+	}
+	return &AddTxResponse{TransactionHash: coreTxn.Hash()},nil
+	
 }
 
 func makeJSONErrorFromGatewayError(err error) *jsonrpc.Error {
@@ -1374,7 +1375,7 @@ func (h *Handler) LegacyTraceBlockTransactions(ctx context.Context, hash felt.Fe
 	return h.traceBlockTransactions(ctx, block, true)
 }
 
-var traceFallbackVersion = semver.MustParse("0.12.2")
+var traceFallbackVersion = semver.MustParse("0.12.0")
 
 func (h *Handler) traceBlockTransactions(ctx context.Context, block *core.Block, //nolint: gocyclo
 	legacyJSON bool,
@@ -1384,7 +1385,7 @@ func (h *Handler) traceBlockTransactions(ctx context.Context, block *core.Block,
 		if blockVer, err := core.ParseBlockVersion(block.ProtocolVersion); err != nil {
 			return nil, ErrUnexpectedError.CloneWithData(err.Error())
 		} else if blockVer.Compare(traceFallbackVersion) != 1 {
-			// version <= 0.12.2
+			// version <= 0.12.0
 			return h.fetchTraces(ctx, block.Hash, legacyJSON)
 		}
 

@@ -4,8 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/core"
+	"github.com/NethermindEth/juno/core/felt"
 	"github.com/NethermindEth/juno/mempool"
+	"github.com/NethermindEth/juno/vm"
 )
 
 // Todo:
@@ -13,11 +16,13 @@ import (
 // - Modify sync service to use blockbuilder blocks instead of feeder-gateway blocks
 
 const (
-	numTxnsPerBlock = 100
-	blockTimeSec = 2*time.Second
+	numTxnsPerBlock int = 100
+	blockTimeSec time.Duration = 2*time.Second
 )
 
 type Builder struct {
+	chain  *blockchain.Blockchain
+	starknetVM     vm.VM
 	mempool *mempool.Mempool
 }
 
@@ -31,9 +36,28 @@ func New(mempool *mempool.Mempool) *Builder {
 func (b *Builder) Run(ctx context.Context) (error){
 	 ticker := time.NewTicker(blockTimeSec)
 	 for range ticker.C {
-		b.Build()
+		newBlock,err := b.buildNewBlock()
+		if err!=nil{
+			panic(err) // Todo: Should we handle this gracefully?
+		}
+		newCommitments,err := b.newCommitments()
+		if err!=nil{
+			panic(err) // Todo: Should we handle this gracefully?
+		}
+		newStateUpdate,err := b.newStateUpdate()
+		if err!=nil{
+			panic(err) // Todo: Should we handle this gracefully?
+		}
+		newClasses,err := b.newClasses()
+		if err!=nil{
+			panic(err) // Todo: Should we handle this gracefully?
+		}
+		err=b.chain.Store(newBlock,newCommitments,newStateUpdate,newClasses)
+		if err!=nil{
+			panic(err) // Todo: Should we handle this gracefully?
+		}		
 	 }
-	 return nil
+	 return nil // Todo: Should not happen
 }
 
 // ProcessTxn adds the transaction to the Builders mempool if it passes all filters
@@ -43,29 +67,66 @@ func (b *Builder) ProcessTxn(tx *core.Transaction) (error) {
 	return b.mempool.Process(tx)
 }
 
-// Build takes the first n-transactions, executes them in order,
-// builds a block, and returns the block.
-func (b *Builder) Build() *core.Block {
+// buildNewBlock() takes the first n-transactions, executes them in fifo order,
+// builds a new block, and returns the resulting block.
+func (b *Builder) buildNewBlock() (*core.Block,error) {	
 
-	newBlock :=core.Block{} // Should be latest block!!
-
-	for i:=0; i<numTxnsPerBlock; i++ {
-		_,err:=b.mempool.Dequeue() // todo: use dequeue'd txn
-		switch err {
-		case mempool.ErrMempoolEmpty:
-			break
-		default:
-			panic("should never happen")
-		}
-
-		// TODO: Execute transactions, and apply new state.
-		// 1. Get latest state
-		// 2. Get the state diff from execution of txn
-		// 3. Apply the state diff
-		// 4. repeat
+	header, err := b.chain.HeadsHeader()
+	if err != nil {
+		return nil,err
 	}
 
-	return &newBlock
+	pendingState, stateCloser, err := b.chain.HeadState()
+	if err != nil {
+		return nil,err
+	}
+	defer stateCloser()
+
+	for i := 0; i < numTxnsPerBlock; i++ {
+		// Todo:
+		// 1. Include failing transactions (they should be charged fees)
+		// 2. Make sure we reapply the new state before calling Execute() again
+		// 3. Should we deduct fees?
+		txn,err:=b.mempool.Dequeue()
+		if err != nil {
+			if err == mempool.ErrMempoolEmpty{
+				break
+			}
+			return nil,err
+		}
+		_, _, err = b.starknetVM.Execute(
+			[]core.Transaction{*txn},
+			nil,
+			header.Number, 
+			header.Timestamp, 
+			header.SequencerAddress, 
+			pendingState,
+			b.chain.Network(), 
+			nil, 
+			false, 
+			nil, 
+			false)
+		if err!=nil {		// Todo: Make sure we don't return if txn just failed.
+			return nil,err
+		}
+		// Todo: finish logic
+		
+	}
+
+	return &core.Block{},nil // Todo: update when this function is completed
+}
+
+func (b *Builder) newCommitments() (*core.BlockCommitments,error){
+	// todo: implement
+	panic("newCommitments() not implemented")
+}
+func (b *Builder) newStateUpdate() (*core.StateUpdate,error){
+	// todo: implement
+	panic("newStateUpdate() not implemented")
+}
+func (b *Builder) newClasses() (map[felt.Felt]core.Class,error){
+	// todo: implement
+	panic("newClasses() not implemented")
 }
 
 

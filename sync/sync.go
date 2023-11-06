@@ -49,6 +49,8 @@ type Synchronizer struct {
 	highestBlockHeader  atomic.Pointer[core.Header]
 	newHeads            *feed.Feed[*core.Header]
 
+	readOnly bool
+
 	log      utils.SimpleLogger
 	listener EventListener
 
@@ -57,7 +59,7 @@ type Synchronizer struct {
 }
 
 func New(bc *blockchain.Blockchain, starkNetData starknetdata.StarknetData,
-	log utils.SimpleLogger, pendingPollInterval time.Duration,
+	log utils.SimpleLogger, pendingPollInterval time.Duration, readOnly bool,
 ) *Synchronizer {
 	s := &Synchronizer{
 		blockchain:          bc,
@@ -66,6 +68,7 @@ func New(bc *blockchain.Blockchain, starkNetData starknetdata.StarknetData,
 		newHeads:            feed.New[*core.Header](),
 		pendingPollInterval: pendingPollInterval,
 		listener:            &SelectiveListener{},
+		readOnly:            readOnly,
 	}
 	return s
 }
@@ -231,12 +234,17 @@ func (s *Synchronizer) syncBlocks(syncCtx context.Context) {
 		s.highestBlockHeader.Store(nil)
 	}()
 
-	fetchers, verifiers := s.setupWorkers()
-	streamCtx, streamCancel := context.WithCancel(syncCtx)
-
 	nextHeight := s.nextHeight()
 	startingHeight := nextHeight
 	s.startingBlockNumber = &startingHeight
+
+	if s.readOnly {
+		<-syncCtx.Done()
+		return
+	}
+
+	fetchers, verifiers := s.setupWorkers()
+	streamCtx, streamCancel := context.WithCancel(syncCtx)
 
 	pendingSem := make(chan struct{}, 1)
 	go s.pollPending(syncCtx, pendingSem)

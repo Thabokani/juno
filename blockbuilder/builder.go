@@ -2,12 +2,17 @@ package blockbuilder
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/NethermindEth/juno/blockbuilder/vm2core"
 	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/core"
 	"github.com/NethermindEth/juno/core/felt"
+	"github.com/NethermindEth/juno/db"
 	"github.com/NethermindEth/juno/mempool"
+	"github.com/NethermindEth/juno/rpc/broadcasted"
 	"github.com/NethermindEth/juno/vm"
 )
 
@@ -16,120 +21,82 @@ import (
 // - Modify sync service to use blockbuilder blocks instead of feeder-gateway blocks
 
 const (
-	numTxnsPerBlock int = 100
-	blockTimeSec time.Duration = 2*time.Second
+	numTxnsPerBlock int           = 100
+	blockTime       time.Duration = 2 * time.Second
 )
 
 type Builder struct {
-	chain  *blockchain.Blockchain
-	starknetVM     vm.VM
-	mempool *mempool.Mempool
+	chain       *blockchain.Blockchain
+	blockNumber uint64
+	starknetVM  vm.VM
+	mempool     *mempool.Mempool
 }
 
-func New(chain *blockchain.Blockchain, starknetVM vm.VM,mempool *mempool.Mempool) *Builder {
+func New(chain *blockchain.Blockchain, starknetVM vm.VM, mempool *mempool.Mempool) *Builder {
 	return &Builder{
-		chain: chain,
+		chain:      chain,
 		starknetVM: starknetVM,
-		mempool: mempool,
+		mempool:    mempool,
 	}
 }
 
 // Run(ctx context.Context) defines blockbuilder as a Service.Service
-func (b *Builder) Run(ctx context.Context) (error){
-	 ticker := time.NewTicker(blockTimeSec)
-	 for range ticker.C {
-		newBlock,err := b.buildNewBlock()
-		if err!=nil{
-			panic(err) // Todo: Should we handle this gracefully?
-		}
-		newCommitments,err := b.newCommitments()
-		if err!=nil{
-			panic(err) // Todo: Should we handle this gracefully?
-		}
-		newStateUpdate,err := b.newStateUpdate()
-		if err!=nil{
-			panic(err) // Todo: Should we handle this gracefully?
-		}
-		newClasses,err := b.newClasses()
-		if err!=nil{
-			panic(err) // Todo: Should we handle this gracefully?
-		}
-		err=b.chain.Store(newBlock,newCommitments,newStateUpdate,newClasses)
-		if err!=nil{
-			panic(err) // Todo: Should we handle this gracefully?
-		}		
-	 }
-	 return nil // Todo: Should not happen
-}
-
-// ProcessTxn adds the transaction to the Builders mempool if it passes all filters
-// otherwise it is dropped (note: for production we would need to relay 
-// the transaction in full / by hash, etc)
-func (b *Builder) ProcessTxn(tx *core.Transaction) (error) {
-	return b.mempool.Process(tx)
-}
-
-// buildNewBlock() takes the first n-transactions, executes them in fifo order,
-// builds a new block, and returns the resulting block.
-func (b *Builder) buildNewBlock() (*core.Block,error) {	
-
-	header, err := b.chain.HeadsHeader()
-	if err != nil {
-		return nil,err
-	}
-
-	pendingState, stateCloser, err := b.chain.HeadState()
-	if err != nil {
-		return nil,err
-	}
-	defer stateCloser()
-
-	for i := 0; i < numTxnsPerBlock; i++ {
-		// Todo:
-		// 1. Include failing transactions (they should be charged fees)
-		// 2. Make sure we reapply the new state before calling Execute() again
-		// 3. Should we deduct fees?
-		txn,err:=b.mempool.Dequeue()
+func (b *Builder) Run(ctx context.Context) error {
+	for ctx.Err() == nil {
+		curHeader, err := b.chain.HeadsHeader()
 		if err != nil {
-			if err == mempool.ErrMempoolEmpty{
-				break
+			if !errors.Is(err, db.ErrKeyNotFound) {
+				return fmt.Errorf("heads header: %v", err)
 			}
-			return nil,err
+			// TODO need to set a fake account
+			curHeader = &core.Header{
+				ParentHash:       new(felt.Felt),
+				SequencerAddress: new(felt.Felt),
+				TransactionCount: 0,
+				ProtocolVersion:  "v0.13.0",
+				GasPrice:         new(felt.Felt),
+			}
 		}
-		_, _, err = b.starknetVM.Execute(
-			[]core.Transaction{*txn},
-			nil,
-			header.Number, 
-			header.Timestamp, 
-			header.SequencerAddress, 
-			pendingState,
-			b.chain.Network(), 
-			nil, 
-			false, 
-			nil, 
-			false)
-		if err!=nil {		// Todo: Make sure we don't return if txn just failed.
-			return nil,err
+
+		pendingHeader := &core.Header{
+			ParentHash:       curHeader.Hash,
+			Number:           curHeader.Number + 1,
+			SequencerAddress: curHeader.SequencerAddress,
+			TransactionCount: 1,
+			Timestamp:        uint64(time.Now().Unix()),
+			ProtocolVersion:  curHeader.ProtocolVersion,
+			GasPrice:         new(felt.Felt),
 		}
-		// Todo: finish logic
-		
+
+		txn := b.mempool.Dequeue()
+		if txn == nil {
+			time.Sleep(time.Second)
+			continue
+		}
+		tx, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txn, b.chain.Network())
+		if err != nil {
+			return fmt.Errorf("adapt broadcasted transaction: %v", err)
+		}
+
+		stateReader, stateCloser, err := b.chain.HeadState()
+		if err != nil {
+			return fmt.Errorf("head state: %v", err)
+		}
+		_, traces, err := b.starknetVM.Execute([]core.Transaction{tx}, []core.Class{class}, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), []*felt.Felt{paidFeeOnL1}, false, new(felt.Felt), false)
+		stateCloser()
+		if err != nil {
+			return fmt.Errorf("execute transaction: %v", err)
+		}
+
+		stateDiff, err := vm2core.TraceToStateDiff(traces[0])
+		if err != nil {
+			return fmt.Errorf("trace to state diff: %v", err)
+		}
+		fmt.Printf("state diff: %+v\n", stateDiff)
+		// TODO: need to calculate transaction receipt
+		// Fill in missing fields in block header (e.g., EventCount)
+		// Calculate block hash and block commitments
+		// err = b.chain.Store(newBlock, newCommitments, newStateUpdate, newClasses)
 	}
-
-	return &core.Block{},nil // Todo: update when this function is completed
+	return nil
 }
-
-func (b *Builder) newCommitments() (*core.BlockCommitments,error){
-	// todo: implement
-	panic("newCommitments() not implemented")
-}
-func (b *Builder) newStateUpdate() (*core.StateUpdate,error){
-	// todo: implement
-	panic("newStateUpdate() not implemented")
-}
-func (b *Builder) newClasses() (map[felt.Felt]core.Class,error){
-	// todo: implement
-	panic("newClasses() not implemented")
-}
-
-
-

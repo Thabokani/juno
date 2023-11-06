@@ -11,7 +11,8 @@ import (
 	stdsync "sync"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/NethermindEth/juno/blockbuilder"
+	"github.com/NethermindEth/juno/mempool"
+	"github.com/NethermindEth/juno/rpc/broadcasted"
 	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/clients/feeder"
 	"github.com/NethermindEth/juno/clients/gateway"
@@ -79,7 +80,7 @@ type traceCacheKey struct {
 
 type Handler struct {
 	bcReader      blockchain.Reader
-	Builder blockbuilder.Builder
+	mempool       *mempool.Mempool
 	syncReader    sync.Reader
 	network       utils.Network
 	gatewayClient Gateway
@@ -989,60 +990,13 @@ func setEventFilterRange(filter *blockchain.EventFilter, fromID, toID *BlockID, 
 
 // AddTransaction relays a transaction to the gateway.
 func (h *Handler) AddTransaction(txnJSON json.RawMessage) (*AddTxResponse, *jsonrpc.Error) {
-	var request map[string]any
-	err := json.Unmarshal(txnJSON, &request)
-	if err != nil {
-		return nil, jsonrpc.Err(jsonrpc.InvalidJSON, err.Error())
-	}
-
-	if txnType, typeFound := request["type"]; typeFound && txnType == TxnInvoke.String() {
-		request["type"] = starknet.TxnInvoke.String()
-
-		updatedReq, errIn := json.Marshal(request)
-		if errIn != nil {
-			return nil, jsonrpc.Err(jsonrpc.InternalError, errIn.Error())
-		}
-		txnJSON = updatedReq
-	} else if version, ok := request["version"]; ok && version == "0x2" {
-		contractClass, ok := request["contract_class"].(map[string]interface{})
-		if !ok {
-			return nil, jsonrpc.Err(jsonrpc.InvalidParams, "{'contract_class': ['Missing data for required field.']}")
-		}
-		sierraProg, ok := contractClass["sierra_program"]
-		if !ok {
-			return nil, jsonrpc.Err(jsonrpc.InvalidParams, "{'sierra_program': ['Missing data for required field.']}")
-		}
-
-		sierraProgBytes, errIn := json.Marshal(sierraProg)
-		if errIn != nil {
-			return nil, jsonrpc.Err(jsonrpc.InternalError, errIn.Error())
-		}
-
-		gwSierraProg, errIn := utils.Gzip64Encode(sierraProgBytes)
-		if errIn != nil {
-			return nil, jsonrpc.Err(jsonrpc.InternalError, errIn.Error())
-		}
-
-		contractClass["sierra_program"] = gwSierraProg
-
-		updatedReq, errIn := json.Marshal(request)
-		if errIn != nil {
-			return nil, jsonrpc.Err(jsonrpc.InternalError, errIn.Error())
-		}
-		txnJSON = updatedReq
-	}
-
-
 	// NOTE: For POC, we do not relay the transaction.
-	var coreTxn core.Transaction
-	if json.Unmarshal(txnJSON, &coreTxn)!=nil{
+	txn := new(broadcasted.BroadcastedTransaction)
+	if err := json.Unmarshal(txnJSON, &txn); err != nil {
 		return nil, jsonrpc.Err(jsonrpc.InternalError, err)
 	}
-	if h.Builder.ProcessTxn(&coreTxn)!=nil{
-		return nil, jsonrpc.Err(jsonrpc.InternalError,err)
-	}
-	return &AddTxResponse{TransactionHash: coreTxn.Hash()},nil
-	
+	h.mempool.Enqueue(txn)
+	return &AddTxResponse{TransactionHash: txn.Hash}, nil
 }
 
 func makeJSONErrorFromGatewayError(err error) *jsonrpc.Error {

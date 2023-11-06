@@ -2,8 +2,11 @@ package blockbuilder
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"time"
 
 	"github.com/NethermindEth/juno/blockbuilder/vm2core"
@@ -48,14 +51,27 @@ func (b *Builder) Run(ctx context.Context) error {
 			if !errors.Is(err, db.ErrKeyNotFound) {
 				return fmt.Errorf("heads header: %v", err)
 			}
-			// TODO need to set a fake account
-			curHeader = &core.Header{
-				ParentHash:       new(felt.Felt),
-				SequencerAddress: new(felt.Felt),
-				TransactionCount: 0,
-				ProtocolVersion:  "v0.13.0",
-				GasPrice:         new(felt.Felt),
+
+			byteValueb0, err := ioutil.ReadFile("./genesis/block0.json")
+			if err != nil {
+				log.Fatal(err)
 			}
+			var block0 *core.Block
+			if err := json.Unmarshal(byteValueb0, &block0); err != nil {
+				log.Fatal(err)
+			}
+
+			byteValueSU0, err := ioutil.ReadFile("./genesis/stateUpdate0.json")
+			if err != nil {
+				log.Fatal(err)
+			}
+			var stateUpdate0 *core.StateUpdate
+			if err := json.Unmarshal(byteValueSU0, &stateUpdate0); err != nil {
+				log.Fatal(err)
+			}
+
+			err = b.chain.Store(block0, &core.BlockCommitments{}, stateUpdate0, nil)
+			continue
 		}
 
 		pendingHeader := &core.Header{

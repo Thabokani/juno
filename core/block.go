@@ -127,7 +127,7 @@ func VerifyBlockHash(b *Block, network utils.Network) (*BlockCommitments, error)
 			overrideSeq = fallbackSeq
 		}
 
-		hash, commitments, err := blockHash(b, network, overrideSeq)
+		hash, commitments, err := BlockHash(b, network, overrideSeq)
 		if err != nil {
 			return nil, err
 		}
@@ -145,8 +145,8 @@ func VerifyBlockHash(b *Block, network utils.Network) (*BlockCommitments, error)
 	return nil, errors.New("can not verify hash in block header")
 }
 
-// blockHash computes the block hash, with option to override sequence address
-func blockHash(b *Block, network utils.Network, overrideSeqAddr *felt.Felt) (*felt.Felt, *BlockCommitments, error) {
+// BlockHash computes the block hash, with option to override sequence address
+func BlockHash(b *Block, network utils.Network, overrideSeqAddr *felt.Felt) (*felt.Felt, *BlockCommitments, error) {
 	metaInfo := NetworkBlockHashMetaInfo(network)
 
 	if b.Number < metaInfo.First07Block {
@@ -157,7 +157,7 @@ func blockHash(b *Block, network utils.Network, overrideSeqAddr *felt.Felt) (*fe
 
 // pre07Hash computes the block hash for blocks generated before Cairo 0.7.0
 func pre07Hash(b *Block, chain *felt.Felt) (*felt.Felt, *BlockCommitments, error) {
-	txCommitment, err := transactionCommitment(b.Transactions, b.Header.ProtocolVersion)
+	txCommitment, err := TransactionCommitment(b.Transactions, b.Header.ProtocolVersion)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -190,10 +190,10 @@ func post07Hash(b *Block, overrideSeqAddr *felt.Felt) (*felt.Felt, *BlockCommitm
 	var tErr, eErr error
 
 	wg.Go(func() {
-		txCommitment, tErr = transactionCommitment(b.Transactions, b.Header.ProtocolVersion)
+		txCommitment, tErr = TransactionCommitment(b.Transactions, b.Header.ProtocolVersion)
 	})
 	wg.Go(func() {
-		eCommitment, eErr = eventCommitment(b.Receipts)
+		eCommitment, eErr = EventCommitment(b.Receipts)
 	})
 	wg.Wait()
 

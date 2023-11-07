@@ -3,13 +3,16 @@ package broadcasted
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"unicode"
 
-	"github.com/NethermindEth/juno/core"
-	"github.com/NethermindEth/juno/vm"
 	"github.com/NethermindEth/juno/adapters/sn2core"
+	"github.com/NethermindEth/juno/core"
 	"github.com/NethermindEth/juno/core/felt"
 	"github.com/NethermindEth/juno/starknet"
 	"github.com/NethermindEth/juno/utils"
+	"github.com/NethermindEth/juno/vm"
 	"github.com/jinzhu/copier"
 )
 
@@ -153,11 +156,11 @@ func adaptDeclaredClass(declaredClass json.RawMessage) (core.Class, error) {
 	}
 }
 
-func AdaptDeclaredClass(declaredClass json.RawMessage) (core.Class, error) {
+func AdaptDeclaredClass(declaredClass json.RawMessage, gzippedProgram bool) (core.Class, error) {
 	var feederClass starknet.ClassDefinition
 	err := json.Unmarshal(declaredClass, &feederClass)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unmarshal into starknet.ClassDefinition: %v", err)
 	}
 
 	switch {
@@ -165,14 +168,25 @@ func AdaptDeclaredClass(declaredClass json.RawMessage) (core.Class, error) {
 		return sn2core.AdaptCairo1Class(feederClass.V1, nil)
 	case feederClass.V0 != nil:
 		// strip the quotes
-		base64Program := string(feederClass.V0.Program[1 : len(feederClass.V0.Program)-1])
-		feederClass.V0.Program, err = utils.Gzip64Decode(base64Program)
-		if err != nil {
-			return nil, err
+		if gzippedProgram {
+			base64Program := string(feederClass.V0.Program[1 : len(feederClass.V0.Program)-1])
+			feederClass.V0.Program, err = utils.Gzip64Decode(base64Program)
+			if err != nil {
+				return nil, fmt.Errorf("Gzip64Decode the base64-encoded program: %v", err)
+			}
 		}
-
 		return sn2core.AdaptCairo0Class(feederClass.V0)
 	default:
 		return nil, errors.New("empty class")
 	}
+}
+
+// See SpaceMap from https://stackoverflow.com/questions/32081808/strip-all-whitespace-from-a-string
+func removeWhitespace(str string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, str)
 }

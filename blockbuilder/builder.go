@@ -15,14 +15,15 @@ import (
 	"github.com/NethermindEth/juno/db"
 	"github.com/NethermindEth/juno/mempool"
 	"github.com/NethermindEth/juno/rpc/broadcasted"
+	"github.com/NethermindEth/juno/utils"
 	"github.com/NethermindEth/juno/vm"
 )
 
 var (
-	//go:embed erc20.json
-	erc20ClassString string
 	//go:embed account.json
 	accountClassString string
+	//go:embed erc20.json
+	erc20ClassString string
 	//go:embed udc.json
 	udcClassString string
 
@@ -67,9 +68,9 @@ func init() {
 	classJSON := json.RawMessage{}
 
 	if err := json.Unmarshal([]byte(accountClassString), &classJSON); err != nil {
-		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
+		panic(fmt.Errorf("unmarshal account class: %v", err))
 	}
-	accountClass, err = broadcasted.AdaptDeclaredClass(classJSON)
+	accountClass, err = broadcasted.AdaptDeclaredClass(classJSON, false)
 	if err != nil {
 		panic(fmt.Errorf("adapt account class: %v", err))
 	}
@@ -77,15 +78,15 @@ func init() {
 	if err := json.Unmarshal([]byte(erc20ClassString), &classJSON); err != nil {
 		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
 	}
-	erc20Class, err = broadcasted.AdaptDeclaredClass(classJSON)
+	erc20Class, err = broadcasted.AdaptDeclaredClass(classJSON, false)
 	if err != nil {
 		panic(fmt.Errorf("adapt erc20 class: %v", err))
 	}
 
 	if err := json.Unmarshal([]byte(udcClassString), &classJSON); err != nil {
-		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
+		panic(fmt.Errorf("unmarshal udc class: %v", err))
 	}
-	udcClass, err = broadcasted.AdaptDeclaredClass(classJSON)
+	udcClass, err = broadcasted.AdaptDeclaredClass(classJSON, false)
 	if err != nil {
 		panic(fmt.Errorf("adapt udc class: %v", err))
 	}
@@ -106,37 +107,72 @@ func New(chain *blockchain.Blockchain, starknetVM vm.VM, mempool *mempool.Mempoo
 	}
 }
 
+func (b *Builder) storeGenesisBlockAndState() error {
+	emptyReceipts := []*core.TransactionReceipt{}
+	// Empty storage and empty classes trie (classes trie only stores Cairo 1 classes).
+	// When classes trie is empty, use the root of storage trie as state commitment.
+	emptyStateRoot := new(felt.Felt)
+	block := &core.Block{
+		Header: &core.Header{
+			Hash:             nil,
+			GlobalStateRoot:  emptyStateRoot,
+			ParentHash:       new(felt.Felt),
+			SequencerAddress: new(felt.Felt),
+			TransactionCount: 0,
+			EventCount:       0,
+			ProtocolVersion:  "v0.12.3",
+			GasPrice:         new(felt.Felt),
+			Timestamp:        uint64(time.Now().Unix()),
+			EventsBloom:      core.EventsBloom(emptyReceipts),
+		},
+		Transactions: []core.Transaction{},
+		Receipts:     emptyReceipts,
+	}
+	blockHash, commitments, err := core.BlockHash(block, utils.GOERLI2, sequencerAddress)
+	if err != nil {
+		return fmt.Errorf("genesis block hash: %v", err)
+	}
+	block.Hash = blockHash
+	// This is equivalent to three Declare v1 transactions.
+	if err := b.chain.Store(block, commitments, &core.StateUpdate{
+		BlockHash: blockHash,
+		NewRoot:   emptyStateRoot,
+		OldRoot:   new(felt.Felt),
+		StateDiff: &core.StateDiff{
+			StorageDiffs:      map[felt.Felt][]core.StorageDiff{},
+			Nonces:            map[felt.Felt]*felt.Felt{},
+			DeployedContracts: []core.AddressClassHashPair{},
+			DeclaredV0Classes: []*felt.Felt{accountClassHash, erc20ClassHash, udcClassHash}, // Doesn't do anything.
+			DeclaredV1Classes: []core.DeclaredV1Class{},
+			ReplacedClasses:   []core.AddressClassHashPair{},
+		},
+	}, map[felt.Felt]core.Class{
+		*accountClassHash: accountClass,
+		*erc20ClassHash:   erc20Class,
+		*udcClassHash:     udcClass,
+	}); err != nil {
+		return fmt.Errorf("store: %v", err)
+	}
+
+	return nil
+}
+
 // Run(ctx context.Context) defines blockbuilder as a Service.Service
 func (b *Builder) Run(ctx context.Context) error {
+	if _, err := b.chain.Height(); err != nil {
+		if !errors.Is(err, db.ErrKeyNotFound) {
+			return fmt.Errorf("chain height: %v", err)
+		}
+
+		if err := b.storeGenesisBlockAndState(); err != nil {
+			return fmt.Errorf("store genesis block and state: %v", err)
+		}
+	}
+
 	for ctx.Err() == nil {
 		curHeader, err := b.chain.HeadsHeader()
 		if err != nil {
-			if !errors.Is(err, db.ErrKeyNotFound) {
-				return fmt.Errorf("heads header: %v", err)
-			}
-
-			// TODO finish updating genesis state here
-			b.chain.UpdateState(func(state *core.State) error {
-				return state.Update(0, &core.StateUpdate{
-					BlockHash: new(felt.Felt),
-					NewRoot:   new(felt.Felt), // we need a better way to do this
-					OldRoot:   new(felt.Felt),
-					StateDiff: &core.StateDiff{},
-				}, map[felt.Felt]core.Class{
-					*accountClassHash: accountClass,
-					*erc20ClassHash:   erc20Class,
-					*udcClassHash:     udcClass,
-				})
-			})
-
-			// TODO need to set a fake account
-			curHeader = &core.Header{
-				ParentHash:       new(felt.Felt),
-				SequencerAddress: new(felt.Felt),
-				TransactionCount: 0,
-				ProtocolVersion:  "v0.13.0",
-				GasPrice:         new(felt.Felt),
-			}
+			return fmt.Errorf("heads header: %v", err)
 		}
 
 		pendingHeader := &core.Header{

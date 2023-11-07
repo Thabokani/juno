@@ -89,6 +89,13 @@ func (b *Blockchain) WithListener(listener EventListener) *Blockchain {
 	return b
 }
 
+// temporary: for setting genesis state
+func (b *Blockchain) UpdateState(cb func(*core.State) error) error {
+	return b.database.Update(func(txn db.Transaction) error {
+		return cb(core.NewState(txn))
+	})
+}
+
 func (b *Blockchain) Network() utils.Network {
 	return b.network
 }

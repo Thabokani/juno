@@ -2,6 +2,8 @@ package blockbuilder
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -16,14 +18,78 @@ import (
 	"github.com/NethermindEth/juno/vm"
 )
 
-// Todo:
-// - Implement block building into blockbuilder.Build()
-// - Modify sync service to use blockbuilder blocks instead of feeder-gateway blocks
+var (
+	//go:embed erc20.json
+	erc20ClassString string
+	//go:embed account.json
+	accountClassString string
+	//go:embed udc.json
+	udcClassString string
 
-const (
-	numTxnsPerBlock int           = 100
-	blockTime       time.Duration = 2 * time.Second
+	sequencerAddress = new(felt.Felt)
+	udcAddress       *felt.Felt
+	feeTokenAddress  *felt.Felt
+
+	accountClassHash *felt.Felt
+	erc20ClassHash   *felt.Felt
+	udcClassHash     *felt.Felt
+
+	accountClass core.Class
+	erc20Class   core.Class
+	udcClass     core.Class
 )
+
+func init() {
+	var err error
+
+	udcAddress, err = new(felt.Felt).SetString("0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf")
+	if err != nil {
+		panic(fmt.Errorf("set udc address: %v", err))
+	}
+	feeTokenAddress, err = new(felt.Felt).SetString("0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7")
+	if err != nil {
+		panic(fmt.Errorf("set fee token address: %v", err))
+	}
+
+	accountClassHash, err = new(felt.Felt).SetString("0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f")
+	if err != nil {
+		panic(fmt.Errorf("set account contract class hash: %v", err))
+	}
+	erc20ClassHash, err = new(felt.Felt).SetString("0x02a8846878b6ad1f54f6ba46f5f40e11cee755c677f130b2c4b60566c9003f1f")
+	if err != nil {
+		panic(fmt.Errorf("set erc20 class hash: %v", err))
+	}
+	udcClassHash, err = new(felt.Felt).SetString("0x07b3e05f48f0c69e4a65ce5e076a66271a527aff2c34ce1083ec6e1526997a69")
+	if err != nil {
+		panic(fmt.Errorf("set udc class hash: %v", err))
+	}
+
+	classJSON := json.RawMessage{}
+
+	if err := json.Unmarshal([]byte(accountClassString), &classJSON); err != nil {
+		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
+	}
+	accountClass, err = broadcasted.AdaptDeclaredClass(classJSON)
+	if err != nil {
+		panic(fmt.Errorf("adapt account class: %v", err))
+	}
+
+	if err := json.Unmarshal([]byte(erc20ClassString), &classJSON); err != nil {
+		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
+	}
+	erc20Class, err = broadcasted.AdaptDeclaredClass(classJSON)
+	if err != nil {
+		panic(fmt.Errorf("adapt erc20 class: %v", err))
+	}
+
+	if err := json.Unmarshal([]byte(udcClassString), &classJSON); err != nil {
+		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
+	}
+	udcClass, err = broadcasted.AdaptDeclaredClass(classJSON)
+	if err != nil {
+		panic(fmt.Errorf("adapt udc class: %v", err))
+	}
+}
 
 type Builder struct {
 	chain       *blockchain.Blockchain
@@ -48,6 +114,21 @@ func (b *Builder) Run(ctx context.Context) error {
 			if !errors.Is(err, db.ErrKeyNotFound) {
 				return fmt.Errorf("heads header: %v", err)
 			}
+
+			// TODO finish updating genesis state here
+			b.chain.UpdateState(func(state *core.State) error {
+				return state.Update(0, &core.StateUpdate{
+					BlockHash: new(felt.Felt),
+					NewRoot:   new(felt.Felt), // we need a better way to do this
+					OldRoot:   new(felt.Felt),
+					StateDiff: &core.StateDiff{},
+				}, map[felt.Felt]core.Class{
+					*accountClassHash: accountClass,
+					*erc20ClassHash:   erc20Class,
+					*udcClassHash:     udcClass,
+				})
+			})
+
 			// TODO need to set a fake account
 			curHeader = &core.Header{
 				ParentHash:       new(felt.Felt),

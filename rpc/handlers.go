@@ -7,12 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	stdsync "sync"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/NethermindEth/juno/mempool"
-	"github.com/NethermindEth/juno/rpc/broadcasted"
 	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/clients/feeder"
 	"github.com/NethermindEth/juno/clients/gateway"
@@ -21,6 +20,8 @@ import (
 	"github.com/NethermindEth/juno/db"
 	"github.com/NethermindEth/juno/feed"
 	"github.com/NethermindEth/juno/jsonrpc"
+	"github.com/NethermindEth/juno/mempool"
+	"github.com/NethermindEth/juno/rpc/broadcasted"
 	"github.com/NethermindEth/juno/starknet"
 	"github.com/NethermindEth/juno/sync"
 	"github.com/NethermindEth/juno/utils"
@@ -106,6 +107,7 @@ type subscription struct {
 
 func New(bcReader blockchain.Reader, syncReader sync.Reader, n utils.Network,
 	gatewayClient Gateway, feederClient *feeder.Client, virtualMachine vm.VM, version string, logger utils.Logger,
+	mempool *mempool.Mempool,
 ) *Handler {
 	return &Handler{
 		bcReader:      bcReader,
@@ -115,6 +117,7 @@ func New(bcReader blockchain.Reader, syncReader sync.Reader, n utils.Network,
 		feederClient:  feederClient,
 		gatewayClient: gatewayClient,
 		vm:            virtualMachine,
+		mempool:       mempool,
 		idgen: func() uint64 {
 			var n uint64
 			for err := binary.Read(rand.Reader, binary.LittleEndian, &n); err != nil; {
@@ -990,10 +993,9 @@ func setEventFilterRange(filter *blockchain.EventFilter, fromID, toID *BlockID, 
 
 // AddTransaction relays a transaction to the gateway.
 func (h *Handler) AddTransaction(txnJSON json.RawMessage) (*AddTxResponse, *jsonrpc.Error) {
-	// NOTE: For POC, we do not relay the transaction.
 	txn := new(broadcasted.BroadcastedTransaction)
 	if err := json.Unmarshal(txnJSON, &txn); err != nil {
-		return nil, jsonrpc.Err(jsonrpc.InternalError, err)
+		return nil, jsonrpc.Err(jsonrpc.InternalError, fmt.Errorf("unmarshal transaction: %v", err))
 	}
 	h.mempool.Enqueue(txn)
 	return &AddTxResponse{TransactionHash: txn.Hash}, nil

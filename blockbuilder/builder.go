@@ -1,6 +1,7 @@
 package blockbuilder
 
 import (
+	"slices"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"github.com/NethermindEth/juno/blockbuilder/vm2core"
 	"github.com/NethermindEth/juno/blockchain"
 	"github.com/NethermindEth/juno/core"
+	"github.com/NethermindEth/juno/core/crypto"
 	"github.com/NethermindEth/juno/core/felt"
 	"github.com/NethermindEth/juno/db"
 	"github.com/NethermindEth/juno/mempool"
@@ -28,68 +30,14 @@ var (
 	udcClassString string
 
 	sequencerAddress = new(felt.Felt)
-	udcAddress       *felt.Felt
-	feeTokenAddress  *felt.Felt
-
-	accountClassHash *felt.Felt
-	erc20ClassHash   *felt.Felt
-	udcClassHash     *felt.Felt
-
-	accountClass core.Class
-	erc20Class   core.Class
-	udcClass     core.Class
 )
 
-func init() {
-	var err error
-
-	udcAddress, err = new(felt.Felt).SetString("0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf")
+func hexToFelt(hex string) *felt.Felt {
+	result, err := new(felt.Felt).SetString(hex)
 	if err != nil {
-		panic(fmt.Errorf("set udc address: %v", err))
+		panic(fmt.Errorf("string %s to felt: %v", hex, err))
 	}
-	feeTokenAddress, err = new(felt.Felt).SetString("0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7")
-	if err != nil {
-		panic(fmt.Errorf("set fee token address: %v", err))
-	}
-
-	accountClassHash, err = new(felt.Felt).SetString("0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f")
-	if err != nil {
-		panic(fmt.Errorf("set account contract class hash: %v", err))
-	}
-	erc20ClassHash, err = new(felt.Felt).SetString("0x02a8846878b6ad1f54f6ba46f5f40e11cee755c677f130b2c4b60566c9003f1f")
-	if err != nil {
-		panic(fmt.Errorf("set erc20 class hash: %v", err))
-	}
-	udcClassHash, err = new(felt.Felt).SetString("0x07b3e05f48f0c69e4a65ce5e076a66271a527aff2c34ce1083ec6e1526997a69")
-	if err != nil {
-		panic(fmt.Errorf("set udc class hash: %v", err))
-	}
-
-	classJSON := json.RawMessage{}
-
-	if err := json.Unmarshal([]byte(accountClassString), &classJSON); err != nil {
-		panic(fmt.Errorf("unmarshal account class: %v", err))
-	}
-	accountClass, err = broadcasted.AdaptDeclaredClass(classJSON, false)
-	if err != nil {
-		panic(fmt.Errorf("adapt account class: %v", err))
-	}
-
-	if err := json.Unmarshal([]byte(erc20ClassString), &classJSON); err != nil {
-		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
-	}
-	erc20Class, err = broadcasted.AdaptDeclaredClass(classJSON, false)
-	if err != nil {
-		panic(fmt.Errorf("adapt erc20 class: %v", err))
-	}
-
-	if err := json.Unmarshal([]byte(udcClassString), &classJSON); err != nil {
-		panic(fmt.Errorf("unmarshal udc class: %v", err))
-	}
-	udcClass, err = broadcasted.AdaptDeclaredClass(classJSON, false)
-	if err != nil {
-		panic(fmt.Errorf("adapt udc class: %v", err))
-	}
+	return result
 }
 
 type Builder struct {
@@ -108,14 +56,89 @@ func New(chain *blockchain.Blockchain, starknetVM vm.VM, mempool *mempool.Mempoo
 }
 
 func (b *Builder) storeGenesisBlockAndState() error {
+	// Initialize values.
+
+	udcAddress, err := new(felt.Felt).SetString("0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf")
+	if err != nil {
+		return fmt.Errorf("set udc address: %v", err)
+	}
+	feeTokenAddress, err := new(felt.Felt).SetString("0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7")
+	if err != nil {
+		return fmt.Errorf("set fee token address: %v", err)
+	}
+
+	accountClassHash, err := new(felt.Felt).SetString("0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f")
+	if err != nil {
+		return fmt.Errorf("set account contract class hash: %v", err)
+	}
+	erc20ClassHash, err := new(felt.Felt).SetString("0x02a8846878b6ad1f54f6ba46f5f40e11cee755c677f130b2c4b60566c9003f1f")
+	if err != nil {
+		return fmt.Errorf("set erc20 class hash: %v", err)
+	}
+	udcClassHash, err := new(felt.Felt).SetString("0x07b3e05f48f0c69e4a65ce5e076a66271a527aff2c34ce1083ec6e1526997a69")
+	if err != nil {
+		return fmt.Errorf("set udc class hash: %v", err)
+	}
+
+	classJSON := json.RawMessage{}
+
+	if err := json.Unmarshal([]byte(accountClassString), &classJSON); err != nil {
+		panic(fmt.Errorf("unmarshal account class: %v", err))
+	}
+	accountClass, err := broadcasted.AdaptDeclaredClass(classJSON, false)
+	if err != nil {
+		panic(fmt.Errorf("adapt account class: %v", err))
+	}
+
+	if err := json.Unmarshal([]byte(erc20ClassString), &classJSON); err != nil {
+		panic(fmt.Errorf("unmarshal erc20 class: %v", err))
+	}
+	erc20Class, err := broadcasted.AdaptDeclaredClass(classJSON, false)
+	if err != nil {
+		panic(fmt.Errorf("adapt erc20 class: %v", err))
+	}
+
+	if err = json.Unmarshal([]byte(udcClassString), &classJSON); err != nil {
+		panic(fmt.Errorf("unmarshal udc class: %v", err))
+	}
+	udcClass, err := broadcasted.AdaptDeclaredClass(classJSON, false)
+	if err != nil {
+		panic(fmt.Errorf("adapt udc class: %v", err))
+	}
+
+	testAddress := hexToFelt("0x2")
+
+	defaultPrefundedAccountBalance, err := new(felt.Felt).SetString("0x3635c9adc5dea00000") // 10^21
+	if err != nil {
+		return fmt.Errorf("default prefunded account balance: %v", err)
+	}
+
+	erc20NameStorageSlot, err := new(felt.Felt).SetString("0x0341c1bdfd89f69748aa00b5742b03adbffd79b8e80cab5c50d91cd8c2a79be1")
+	if err != nil {
+		return fmt.Errorf("erc20 name storage slot: %v", err)
+	}
+	erc20SymbolStorageSlot, err := new(felt.Felt).SetString("0x00b6ce5410fca59d078ee9b2a4371a9d684c530d697c64fbef0ae6d5e8f0ac72")
+	if err != nil {
+		return fmt.Errorf("erc20 symbol storage slot: %v", err)
+	}
+	erc20DecimalsStorageSlot, err := new(felt.Felt).SetString("0x01f0d4aa99431d246bac9b8e48c33e888245b15e9678f64f9bdfc8823dc8f979")
+	if err != nil {
+		return fmt.Errorf("erc20 decimals storage slot: %v", err)
+	}
+
+	// X 1. deploy fee contract
+	// X 2. deploy udc contract
+	// -- should only require setting storage vars for the above --
+	// 3. deploy and fund accounts
+
+	// Store genesis state.
+
+	stateRoot := hexToFelt("0xd149d5719ffbce57fca2673f412b88565f1c2ebf37b570efc3034b18545c45")
 	emptyReceipts := []*core.TransactionReceipt{}
-	// Empty storage and empty classes trie (classes trie only stores Cairo 1 classes).
-	// When classes trie is empty, use the root of storage trie as state commitment.
-	emptyStateRoot := new(felt.Felt)
 	block := &core.Block{
 		Header: &core.Header{
 			Hash:             nil,
-			GlobalStateRoot:  emptyStateRoot,
+			GlobalStateRoot:  stateRoot,
 			ParentHash:       new(felt.Felt),
 			SequencerAddress: new(felt.Felt),
 			TransactionCount: 0,
@@ -134,14 +157,32 @@ func (b *Builder) storeGenesisBlockAndState() error {
 	}
 	block.Hash = blockHash
 	// This is equivalent to three Declare v1 transactions.
-	if err := b.chain.Store(block, commitments, &core.StateUpdate{
+	if err = b.chain.Store(block, commitments, &core.StateUpdate{
 		BlockHash: blockHash,
-		NewRoot:   emptyStateRoot,
+		NewRoot:   stateRoot,
 		OldRoot:   new(felt.Felt),
 		StateDiff: &core.StateDiff{
-			StorageDiffs:      map[felt.Felt][]core.StorageDiff{},
-			Nonces:            map[felt.Felt]*felt.Felt{},
-			DeployedContracts: []core.AddressClassHashPair{},
+			StorageDiffs: map[felt.Felt][]core.StorageDiff{
+				*feeTokenAddress: {
+					{Key: erc20NameStorageSlot, Value: hexToFelt("0x4574686572")},
+					{Key: erc20SymbolStorageSlot, Value: hexToFelt("0x455448")},
+					{Key: erc20DecimalsStorageSlot, Value: new(felt.Felt).SetUint64(18)},
+					{Key: getStorageVarAddress("ERC20_balances", testAddress), Value: defaultPrefundedAccountBalance},
+				},
+				*testAddress: {
+					{Key: hexToFelt("0x01379ac0624b939ceb9dede92211d7db5ee174fe28be72245b0a1a2abd81c98f"), Value: hexToFelt("0x043661740237e2be32500042dbd2afda8ab94ad11d6cea9da379ee5de3d376a2")},
+				},
+			},
+			Nonces: map[felt.Felt]*felt.Felt{
+				*feeTokenAddress: new(felt.Felt).SetUint64(1),
+				*udcAddress:      new(felt.Felt).SetUint64(1),
+				*testAddress:     new(felt.Felt).SetUint64(1),
+			},
+			DeployedContracts: []core.AddressClassHashPair{
+				{Address: feeTokenAddress, ClassHash: erc20ClassHash},
+				{Address: udcAddress, ClassHash: udcClassHash},
+				{Address: testAddress, ClassHash: accountClassHash},
+			},
 			DeclaredV0Classes: []*felt.Felt{accountClassHash, erc20ClassHash, udcClassHash}, // Doesn't do anything.
 			DeclaredV1Classes: []core.DeclaredV1Class{},
 			ReplacedClasses:   []core.AddressClassHashPair{},
@@ -194,12 +235,22 @@ func (b *Builder) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("adapt broadcasted transaction: %v", err)
 		}
+		classes := []core.Class{}
+		switch class.(type) {
+		case *core.Cairo0Class, *core.Cairo1Class:
+			classes = append(classes, class)
+		}
+		paidFeesOnL1 := []*felt.Felt{}
+		switch tx.(type) {
+		case *core.L1HandlerTransaction:
+			paidFeesOnL1 = append(paidFeesOnL1, paidFeeOnL1)
+		}
 
 		stateReader, stateCloser, err := b.chain.HeadState()
 		if err != nil {
 			return fmt.Errorf("head state: %v", err)
 		}
-		_, traces, err := b.starknetVM.Execute([]core.Transaction{tx}, []core.Class{class}, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), []*felt.Felt{paidFeeOnL1}, false, new(felt.Felt), false)
+		_, traces, err := b.starknetVM.Execute([]core.Transaction{tx}, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
 		stateCloser()
 		if err != nil {
 			return fmt.Errorf("execute transaction: %v", err)
@@ -217,3 +268,24 @@ func (b *Builder) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
+var (
+	patiricaUpperBound  = hexToFelt("0x800000000000000000000000000000000000000000000000000000000000000") // 2^251
+	l2AddressUpperBound = new(felt.Felt).Sub(patiricaUpperBound, new(felt.Felt).SetUint64(256))
+)
+
+func getStorageVarAddress(name string, args ...*felt.Felt) *felt.Felt {
+	nameKeccak, err := crypto.StarknetKeccak([]byte(name))
+	if err != nil {
+		panic(fmt.Errorf("starknet keccak: %v", err))
+	}
+	x := crypto.PedersenArray(slices.Insert(args, 0, nameKeccak)...)
+	if x.Cmp(l2AddressUpperBound) == -1 {
+		return x
+	}
+	return new(felt.Felt).Sub(x, l2AddressUpperBound)
+}
+
+/*
+starkli deploy --account myaccount 0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f --keystore keystore
+*/

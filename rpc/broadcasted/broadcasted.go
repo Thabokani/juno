@@ -44,6 +44,28 @@ func (t TransactionType) String() string {
 	}
 }
 
+func (t TransactionType) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%q", t.String())), nil
+}
+
+func (t *TransactionType) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case `"DECLARE"`:
+		*t = TxnDeclare
+	case `"DEPLOY"`:
+		*t = TxnDeploy
+	case `"DEPLOY_ACCOUNT"`:
+		*t = TxnDeployAccount
+	case `"INVOKE"`, `"INVOKE_FUNCTION"`:
+		*t = TxnInvoke
+	case `"L1_HANDLER"`:
+		*t = TxnL1Handler
+	default:
+		return errors.New("unknown TransactionType")
+	}
+	return nil
+}
+
 // https://github.com/starkware-libs/starknet-specs/blob/a789ccc3432c57777beceaa53a34a7ae2f25fda0/api/starknet_api_openrpc.json#L1252
 //
 //nolint:lll

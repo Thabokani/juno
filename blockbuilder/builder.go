@@ -1,12 +1,12 @@
 package blockbuilder
 
 import (
-	"slices"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/NethermindEth/juno/blockbuilder/vm2core"
@@ -126,11 +126,6 @@ func (b *Builder) storeGenesisBlockAndState() error {
 		return fmt.Errorf("erc20 decimals storage slot: %v", err)
 	}
 
-	// X 1. deploy fee contract
-	// X 2. deploy udc contract
-	// -- should only require setting storage vars for the above --
-	// 3. deploy and fund accounts
-
 	// Store genesis state.
 
 	stateRoot := hexToFelt("0xd149d5719ffbce57fca2673f412b88565f1c2ebf37b570efc3034b18545c45")
@@ -156,7 +151,6 @@ func (b *Builder) storeGenesisBlockAndState() error {
 		return fmt.Errorf("genesis block hash: %v", err)
 	}
 	block.Hash = blockHash
-	// This is equivalent to three Declare v1 transactions.
 	if err = b.chain.Store(block, commitments, &core.StateUpdate{
 		BlockHash: blockHash,
 		NewRoot:   stateRoot,
@@ -216,16 +210,6 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("heads header: %v", err)
 		}
 
-		pendingHeader := &core.Header{
-			ParentHash:       curHeader.Hash,
-			Number:           curHeader.Number + 1,
-			SequencerAddress: curHeader.SequencerAddress,
-			TransactionCount: 1,
-			Timestamp:        uint64(time.Now().Unix()),
-			ProtocolVersion:  curHeader.ProtocolVersion,
-			GasPrice:         new(felt.Felt),
-		}
-
 		txn := b.mempool.Dequeue()
 		if txn == nil {
 			time.Sleep(time.Second)
@@ -241,16 +225,36 @@ func (b *Builder) Run(ctx context.Context) error {
 			classes = append(classes, class)
 		}
 		paidFeesOnL1 := []*felt.Felt{}
-		switch tx.(type) {
+		declaredClasses := map[felt.Felt]core.Class{}
+		switch snTx := tx.(type) {
 		case *core.L1HandlerTransaction:
 			paidFeesOnL1 = append(paidFeesOnL1, paidFeeOnL1)
+		case *core.DeclareTransaction:
+			declaredClasses[*snTx.ClassHash] = class
 		}
 
+		singleReceipt := []*core.TransactionReceipt{{
+			TransactionHash: tx.Hash(),
+		}}
+		pendingHeader := &core.Header{
+			ParentHash:       curHeader.Hash,
+			Number:           curHeader.Number + 1,
+			GlobalStateRoot:  new(felt.Felt), // TODO
+			SequencerAddress: curHeader.SequencerAddress,
+			TransactionCount: 1,
+			Timestamp:        uint64(time.Now().Unix()),
+			ProtocolVersion:  curHeader.ProtocolVersion,
+			GasPrice:         new(felt.Felt),
+			EventCount:       0,                               // TODO
+			EventsBloom:      core.EventsBloom(singleReceipt), // TODO
+		}
+
+		txs := []core.Transaction{tx}
 		stateReader, stateCloser, err := b.chain.HeadState()
 		if err != nil {
 			return fmt.Errorf("head state: %v", err)
 		}
-		_, traces, err := b.starknetVM.Execute([]core.Transaction{tx}, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
+		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
 		stateCloser()
 		if err != nil {
 			return fmt.Errorf("execute transaction: %v", err)
@@ -260,11 +264,27 @@ func (b *Builder) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("trace to state diff: %v", err)
 		}
-		fmt.Printf("state diff: %+v\n", stateDiff)
-		// TODO: need to calculate transaction receipt
-		// Fill in missing fields in block header (e.g., EventCount)
-		// Calculate block hash and block commitments
-		// err = b.chain.Store(newBlock, newCommitments, newStateUpdate, newClasses)
+		block := &core.Block{
+			Header:       pendingHeader,
+			Receipts:     singleReceipt, // TODO
+			Transactions: txs,
+		}
+		blockHash, commitments, err := core.BlockHash(block, utils.GOERLI2, sequencerAddress)
+		if err != nil {
+			return fmt.Errorf("block hash: %v", err)
+		}
+		block.Hash = blockHash
+		if err = b.chain.Store(block, commitments, &core.StateUpdate{
+			BlockHash: blockHash,
+			// TODO. There isn't a good way to get this when we're sequencing. We need to refactor core/state.go and core/state_update.go.
+			NewRoot:   new(felt.Felt),
+			OldRoot:   curHeader.GlobalStateRoot,
+			StateDiff: stateDiff,
+		}, declaredClasses); err != nil {
+			return fmt.Errorf("store: %v", err)
+		}
+		fmt.Printf("stored block %d\n", block.Number)
+		fmt.Printf("  transaction hash: %s\n", tx.Hash())
 	}
 	return nil
 }

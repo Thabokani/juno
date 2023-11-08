@@ -998,7 +998,11 @@ func (h *Handler) AddTransaction(txnJSON json.RawMessage) (*AddTxResponse, *json
 		return nil, jsonrpc.Err(jsonrpc.InternalError, fmt.Errorf("unmarshal transaction: %v", err))
 	}
 	h.mempool.Enqueue(txn)
-	return &AddTxResponse{TransactionHash: txn.Hash}, nil
+	coreTx, _, _, err := broadcasted.AdaptBroadcastedTransaction(txn, utils.GOERLI2)
+	if err != nil {
+		return nil, jsonrpc.Err(jsonrpc.InternalError, fmt.Errorf("adapt broadcasted transaction: %v", err))
+	}
+	return &AddTxResponse{TransactionHash: coreTx.Hash()}, nil
 }
 
 func makeJSONErrorFromGatewayError(err error) *jsonrpc.Error {

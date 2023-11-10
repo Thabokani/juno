@@ -70,6 +70,7 @@ func (cs *cachedState) GetDeployedContracts() []core.AddressClassHashPair {
 	return cs.stateDiff.DeployedContracts
 }
 
+// SetDeployedContract sets the deployed contract
 func (cs *cachedState) SetDeployedContract(address *felt.Felt, classHash *felt.Felt) {
 	cs.stateDiff.DeployedContracts = append(cs.stateDiff.DeployedContracts, core.AddressClassHashPair{
 		Address:   address,

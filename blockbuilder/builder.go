@@ -254,6 +254,7 @@ func (b *Builder) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("head state: %v", err)
 		}
+
 		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
 		stateCloser()
 		if err != nil {

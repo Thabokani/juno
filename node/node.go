@@ -107,7 +107,8 @@ func New(cfg *Config, version string) (*Node, error) { //nolint:gocyclo,funlen
 
 	chain := blockchain.New(database, cfg.Network, log)
 
-	blockbuilder:= blockbuilder.New(chain,vm.New(log), mempool.New())
+	mpool := mempool.New()
+	blockbuilder:= blockbuilder.New(chain,vm.New(log), mpool)
 	services = append(services, blockbuilder)
 
 	feederClientTimeout := 5 * time.Second
@@ -117,7 +118,7 @@ func New(cfg *Config, version string) (*Node, error) { //nolint:gocyclo,funlen
 	gatewayClient := gateway.NewClient(cfg.Network.GatewayURL(), log).WithUserAgent(ua)
 
 	throttledVM := NewThrottledVM(vm.New(log), cfg.MaxVMs, int32(cfg.MaxVMs))
-	rpcHandler := rpc.New(chain, synchronizer, cfg.Network, gatewayClient, client, throttledVM, version, log)
+	rpcHandler := rpc.New(chain, synchronizer, cfg.Network, gatewayClient, client, throttledVM, version, log, mpool)
 	services = append(services, rpcHandler)
 	// to improve RPC throughput we double GOMAXPROCS
 	maxGoroutines := 2 * runtime.GOMAXPROCS(0)

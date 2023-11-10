@@ -456,9 +456,9 @@ func VerifyTransactions(txs []Transaction, n utils.Network, protocolVersion stri
 
 const commitmentTrieHeight = 64
 
-// transactionCommitment is the root of a height 64 binary Merkle Patricia tree of the
+// TransactionCommitment is the root of a height 64 binary Merkle Patricia tree of the
 // transaction hashes and signatures in a block.
-func transactionCommitment(transactions []Transaction, protocolVersion string) (*felt.Felt, error) {
+func TransactionCommitment(transactions []Transaction, protocolVersion string) (*felt.Felt, error) {
 	var commitment *felt.Felt
 	v0_11_1 := semver.MustParse("0.11.1")
 	return commitment, trie.RunOnTempTrie(commitmentTrieHeight, func(trie *trie.Trie) error {
@@ -506,8 +506,8 @@ func ParseBlockVersion(protocolVersion string) (*semver.Version, error) {
 	return semver.NewVersion(strings.Join(digits[:3], sep))
 }
 
-// eventCommitment computes the event commitment for a block.
-func eventCommitment(receipts []*TransactionReceipt) (*felt.Felt, error) {
+// EventCommitment computes the event commitment for a block.
+func EventCommitment(receipts []*TransactionReceipt) (*felt.Felt, error) {
 	var commitment *felt.Felt
 	return commitment, trie.RunOnTempTrie(commitmentTrieHeight, func(trie *trie.Trie) error {
 		eventCount := uint64(0)

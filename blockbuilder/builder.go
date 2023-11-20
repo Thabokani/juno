@@ -215,6 +215,8 @@ func (b *Builder) Run(ctx context.Context) error {
 			time.Sleep(time.Second)
 			continue
 		}
+
+		// Adapt transactions to core type
 		tx, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txn, b.chain.Network())
 		if err != nil {
 			return fmt.Errorf("adapt broadcasted transaction: %v", err)
@@ -233,6 +235,7 @@ func (b *Builder) Run(ctx context.Context) error {
 			declaredClasses[*snTx.ClassHash] = class
 		}
 
+		// Build up the header
 		singleReceipt := []*core.TransactionReceipt{{
 			TransactionHash: tx.Hash(),
 		}}
@@ -255,7 +258,10 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("head state: %v", err)
 		}
 
-		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
+		cState := NewCachedState(stateReader, pendingHeader.Number)
+
+		// Execute all the transactions in sequnce
+		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, cState, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
 		stateCloser()
 		if err != nil {
 			return fmt.Errorf("execute transaction: %v", err)

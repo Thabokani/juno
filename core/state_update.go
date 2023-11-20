@@ -38,6 +38,10 @@ type DeclaredV1Class struct {
 	CompiledClassHash *felt.Felt
 }
 
+func (dc DeclaredV1Class) Version() uint64 {
+	return uint64(1)
+}
+
 func (d *StateDiff) Commitment() *felt.Felt {
 	version := felt.Zero
 	var tmpFelt felt.Felt

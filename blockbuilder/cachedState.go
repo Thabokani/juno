@@ -6,11 +6,14 @@ import (
 )
 
 type cachedState struct {
+	blockNumber uint64
 	stateDiff   *core.StateDiff
-	stateReader *core.StateReader
+	stateReader core.StateReader
 }
 
-func NewCachedState(stateReader *core.StateReader) *cachedState {
+var _ core.StateReader = (*cachedState)(nil)
+
+func NewCachedState(stateReader core.StateReader, blockNumber uint64) *cachedState {
 	stateDiff := &core.StateDiff{
 		StorageDiffs:      make(map[felt.Felt][]core.StorageDiff),
 		Nonces:            make(map[felt.Felt]*felt.Felt),
@@ -20,10 +23,59 @@ func NewCachedState(stateReader *core.StateReader) *cachedState {
 		ReplacedClasses:   make([]core.AddressClassHashPair, 0),
 	}
 	return &cachedState{
+		blockNumber: blockNumber,
 		stateDiff:   stateDiff,
 		stateReader: stateReader,
 	}
 }
+
+func (cs *cachedState) ContractClassHash(addr *felt.Felt) (*felt.Felt, error) {
+	for _, pair := range cs.stateDiff.DeployedContracts {
+		if pair.Address.Cmp(addr) == 0 {
+			return pair.ClassHash, nil
+		}
+	}
+
+	for _, pair := range cs.stateDiff.ReplacedClasses {
+		if pair.Address.Cmp(addr) == 0 {
+			return pair.ClassHash, nil
+		}
+	}
+
+	return cs.stateReader.ContractClassHash(addr)
+}
+
+func (cs *cachedState) ContractNonce(addr *felt.Felt) (*felt.Felt, error) {
+	if nonce, ok := cs.stateDiff.Nonces[*addr]; ok {
+		return nonce, nil
+	}
+	return cs.stateReader.ContractNonce(addr)
+}
+func (cs *cachedState) ContractStorage(addr, key *felt.Felt) (*felt.Felt, error) {
+	if storageDiff, ok := cs.stateDiff.StorageDiffs[*addr]; ok {
+		for _, diff := range storageDiff {
+			if diff.Key.Cmp(key) == 0 {
+				return diff.Value, nil
+			}
+		}
+	}
+	return cs.stateReader.ContractStorage(addr, key)
+}
+
+func (cs *cachedState) Class(classHash *felt.Felt) (*core.DeclaredClass, error) {
+	for _, class := range cs.stateDiff.DeclaredV1Classes {
+		if class.ClassHash.Cmp(classHash) == 0 {
+			return &core.DeclaredClass{
+				At:    cs.blockNumber,
+				Class: class,
+			}, nil
+
+		}
+	}
+	return cs.stateReader.Class(classHash)
+}
+
+/// Todo: REMOVE EVERYTHING BELOW THIS?
 
 // GetStateDiff returns the cached state diff
 func (cs *cachedState) GetStateDiff() *core.StateDiff {
@@ -40,7 +92,7 @@ func (cs *cachedState) GetStorageDiffValue(address *felt.Felt, key *felt.Felt) (
 			}
 		}
 	}
-	return (*cs.stateReader).ContractStorage(address, key)
+	return cs.stateReader.ContractStorage(address, key)
 }
 
 // SetStorageDiffValue sets the value of the storage diff for the given address and key
@@ -57,7 +109,7 @@ func (cs *cachedState) GetNonce(address *felt.Felt) (*felt.Felt, error) {
 	if nonce, ok := cs.stateDiff.Nonces[*address]; ok {
 		return nonce, nil
 	}
-	return (*cs.stateReader).ContractNonce(address)
+	return cs.stateReader.ContractNonce(address)
 }
 
 // SetNonce sets the nonce for the given address

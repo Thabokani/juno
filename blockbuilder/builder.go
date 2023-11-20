@@ -258,19 +258,17 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("head state: %v", err)
 		}
 
-		cState := NewCachedState(stateReader, pendingHeader.Number)
+		// cState := NewCachedState(stateReader, pendingHeader.Number)
 
 		// Execute all the transactions in sequnce
-		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, cState, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
+		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
 		stateCloser()
 		if err != nil {
 			return fmt.Errorf("execute transaction: %v", err)
 		}
 
-		stateDiff, err := vm2core.TraceToStateDiff(traces[0])
-		if err != nil {
-			return fmt.Errorf("trace to state diff: %v", err)
-		}
+		mergedStateDiffs, err := mergeStateDiffs(traces)
+
 		block := &core.Block{
 			Header:       pendingHeader,
 			Receipts:     singleReceipt, // TODO
@@ -286,7 +284,7 @@ func (b *Builder) Run(ctx context.Context) error {
 			// TODO. There isn't a good way to get this when we're sequencing. We need to refactor core/state.go and core/state_update.go.
 			NewRoot:   new(felt.Felt),
 			OldRoot:   curHeader.GlobalStateRoot,
-			StateDiff: stateDiff,
+			StateDiff: mergedStateDiffs,
 		}, declaredClasses); err != nil {
 			return fmt.Errorf("store: %v", err)
 		}
@@ -316,3 +314,38 @@ func getStorageVarAddress(name string, args ...*felt.Felt) *felt.Felt {
 /*
 starkli deploy --account myaccount 0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f --keystore keystore
 */
+
+func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
+	mergedStateDiff := &core.StateDiff{}
+	for _, trace := range traces {
+		traceStateDiff, err := vm2core.TraceToStateDiff(trace)
+		if err != nil {
+			return nil, fmt.Errorf("trace to state diff: %v", err)
+		}
+
+		for newAddr, newStorageDiffs := range traceStateDiff.StorageDiffs {
+			if mergedStateDiff.StorageDiffs[newAddr] == nil {
+				mergedStateDiff.StorageDiffs[newAddr] = append(mergedStateDiff.StorageDiffs[newAddr], newStorageDiffs...)
+			} else {
+				for _, newStorageDiff := range newStorageDiffs {
+					keyExists := false
+					for i := range mergedStateDiff.StorageDiffs[newAddr] {
+						if mergedStateDiff.StorageDiffs[newAddr][i].Key.Cmp(newStorageDiff.Key) == 0 {
+							mergedStateDiff.StorageDiffs[newAddr][i].Value = newStorageDiff.Value
+							keyExists = true
+							break
+						}
+					}
+					if !keyExists {
+						mergedStateDiff.StorageDiffs[newAddr] = append(mergedStateDiff.StorageDiffs[newAddr], newStorageDiff)
+					}
+				}
+			}
+		}
+
+		// todo, finish of remaining logic
+
+	}
+
+	return mergedStateDiff, nil
+}

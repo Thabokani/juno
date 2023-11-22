@@ -210,14 +210,10 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("heads header: %v", err)
 		}
 
-		txn := b.mempool.Dequeue()
-		if txn == nil {
-			time.Sleep(time.Second)
-			continue
-		}
+		txns := b.mempool.WaitForTwoTransactions()
 
 		// Adapt transactions to core type
-		tx, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txn, b.chain.Network())
+		tx1, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txns[0], b.chain.Network())
 		if err != nil {
 			return fmt.Errorf("adapt broadcasted transaction: %v", err)
 		}
@@ -228,7 +224,23 @@ func (b *Builder) Run(ctx context.Context) error {
 		}
 		paidFeesOnL1 := []*felt.Felt{}
 		declaredClasses := map[felt.Felt]core.Class{}
-		switch snTx := tx.(type) {
+		switch snTx := tx1.(type) {
+		case *core.L1HandlerTransaction:
+			paidFeesOnL1 = append(paidFeesOnL1, paidFeeOnL1)
+		case *core.DeclareTransaction:
+			declaredClasses[*snTx.ClassHash] = class
+		}
+
+		// Adapt transactions to core type
+		tx2, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txns[1], b.chain.Network())
+		if err != nil {
+			return fmt.Errorf("adapt broadcasted transaction: %v", err)
+		}
+		switch class.(type) {
+		case *core.Cairo0Class, *core.Cairo1Class:
+			classes = append(classes, class)
+		}
+		switch snTx := tx2.(type) {
 		case *core.L1HandlerTransaction:
 			paidFeesOnL1 = append(paidFeesOnL1, paidFeeOnL1)
 		case *core.DeclareTransaction:
@@ -237,7 +249,7 @@ func (b *Builder) Run(ctx context.Context) error {
 
 		// Build up the header
 		singleReceipt := []*core.TransactionReceipt{{
-			TransactionHash: tx.Hash(),
+			TransactionHash: tx2.Hash(),
 		}}
 		pendingHeader := &core.Header{
 			ParentHash:       curHeader.Hash,
@@ -252,7 +264,7 @@ func (b *Builder) Run(ctx context.Context) error {
 			EventsBloom:      core.EventsBloom(singleReceipt), // TODO
 		}
 
-		txs := []core.Transaction{tx}
+		txs := []core.Transaction{tx1, tx2}
 		stateReader, stateCloser, err := b.chain.HeadState()
 		if err != nil {
 			return fmt.Errorf("head state: %v", err)
@@ -289,7 +301,8 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("store: %v", err)
 		}
 		fmt.Printf("stored block %d\n", block.Number)
-		fmt.Printf("  transaction hash: %s\n", tx.Hash())
+		fmt.Printf("  transaction 1 hash: %s\n", tx1.Hash())
+		fmt.Printf("  transaction 2 hash: %s\n", tx2.Hash())
 	}
 	return nil
 }
@@ -315,6 +328,7 @@ func getStorageVarAddress(name string, args ...*felt.Felt) *felt.Felt {
 starkli deploy --account myaccount 0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f --keystore keystore
 */
 
+// TODO: This is not efficient, we should update *core.StateDiff
 func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 	mergedStateDiff := &core.StateDiff{
 		StorageDiffs:      make(map[felt.Felt][]core.StorageDiff),

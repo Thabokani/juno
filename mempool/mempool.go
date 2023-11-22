@@ -2,6 +2,8 @@ package mempool
 
 import (
 	"sync"
+	"time"
+
 	"github.com/NethermindEth/juno/rpc/broadcasted"
 )
 
@@ -33,4 +35,19 @@ func (m *Mempool) Dequeue() *broadcasted.BroadcastedTransaction {
 	m.txs[0] = nil // avoid memory leak
 	m.txs = m.txs[1:]
 	return txn
+}
+
+func (m *Mempool) WaitForTwoTransactions() []*broadcasted.BroadcastedTransaction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for len(m.txs) < 2 {
+		m.mu.Unlock()
+		time.Sleep(time.Second)
+		m.mu.Lock()
+	}
+	txn1 := m.Dequeue()
+	txn2 := m.Dequeue()
+
+	return []*broadcasted.BroadcastedTransaction{txn1, txn2}
 }

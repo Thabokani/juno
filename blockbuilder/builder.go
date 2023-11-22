@@ -316,7 +316,15 @@ starkli deploy --account myaccount 0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36
 */
 
 func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
-	mergedStateDiff := &core.StateDiff{}
+	mergedStateDiff := &core.StateDiff{
+		StorageDiffs:      make(map[felt.Felt][]core.StorageDiff),
+		Nonces:            make(map[felt.Felt]*felt.Felt),
+		DeployedContracts: make([]core.AddressClassHashPair, 0),
+		DeclaredV0Classes: make([]*felt.Felt, 0),
+		DeclaredV1Classes: make([]core.DeclaredV1Class, 0),
+		ReplacedClasses:   make([]core.AddressClassHashPair, 0),
+	}
+
 	for _, trace := range traces {
 		traceStateDiff, err := vm2core.TraceToStateDiff(trace)
 		if err != nil {
@@ -343,7 +351,70 @@ func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 			}
 		}
 
-		// todo, finish of remaining logic
+		// Nonces
+		for tAddr, tNonce := range traceStateDiff.Nonces {
+			mergedStateDiff.Nonces[tAddr] = tNonce
+		}
+
+		// Deployed contracts
+		for _, tAddressClashHashPair := range traceStateDiff.DeployedContracts {
+			if mergedStateDiff.DeployedContracts == nil {
+				mergedStateDiff.DeployedContracts = append(mergedStateDiff.DeployedContracts, tAddressClashHashPair)
+			} else {
+				alreadyExists := false
+				for _, mergedAddressClassHashPair := range mergedStateDiff.DeployedContracts {
+					if mergedAddressClassHashPair.Address.Cmp(tAddressClashHashPair.Address) == 0 && mergedAddressClassHashPair.ClassHash.Cmp(tAddressClashHashPair.ClassHash) == 0 {
+						alreadyExists = true
+						break
+					}
+				}
+				if !alreadyExists {
+					mergedStateDiff.DeployedContracts = append(mergedStateDiff.DeployedContracts, tAddressClashHashPair)
+				}
+			}
+		}
+
+		// DeclaredV0 classes
+		for _, tClassHash := range traceStateDiff.DeclaredV0Classes {
+			alreadyExists := false
+			for _, mergedClassHash := range mergedStateDiff.DeclaredV0Classes {
+				if mergedClassHash.Cmp(tClassHash) == 0 {
+					alreadyExists = true
+					break
+				}
+			}
+			if !alreadyExists {
+				mergedStateDiff.DeclaredV0Classes = append(mergedStateDiff.DeclaredV0Classes, tClassHash)
+			}
+		}
+
+		// DeclaredV1 classes
+		for _, tClass := range traceStateDiff.DeclaredV1Classes {
+			alreadyExists := false
+			for _, mergedClass := range mergedStateDiff.DeclaredV1Classes {
+				if mergedClass.ClassHash.Cmp(tClass.ClassHash) == 0 && mergedClass.CompiledClassHash.Cmp(tClass.CompiledClassHash) == 0 {
+					alreadyExists = true
+					break
+				}
+			}
+			if !alreadyExists {
+				mergedStateDiff.DeclaredV1Classes = append(mergedStateDiff.DeclaredV1Classes, tClass)
+			}
+		}
+
+		// Replaced classes
+		for _, tAddressClassHashPair := range traceStateDiff.ReplacedClasses {
+			alreadyExists := false
+			for _, mergedAddressClassHashPair := range mergedStateDiff.ReplacedClasses {
+				if mergedAddressClassHashPair.Address.Cmp(tAddressClassHashPair.Address) == 0 && mergedAddressClassHashPair.ClassHash.Cmp(tAddressClassHashPair.ClassHash) == 0 {
+					alreadyExists = true
+					break
+				}
+			}
+			if !alreadyExists {
+				mergedStateDiff.ReplacedClasses = append(mergedStateDiff.ReplacedClasses, tAddressClassHashPair)
+			}
+		}
 
 	}
 

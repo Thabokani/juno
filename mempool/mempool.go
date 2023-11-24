@@ -51,3 +51,16 @@ func (m *Mempool) WaitForTwoTransactions() []*broadcasted.BroadcastedTransaction
 	txn2 := m.Dequeue()
 	return []*broadcasted.BroadcastedTransaction{txn1, txn2}
 }
+func (m *Mempool) WaitForOneTransactions() []*broadcasted.BroadcastedTransaction {
+	m.mu.Lock()
+	for len(m.txs) < 1 {
+		fmt.Println("-- waiting for 2 txns. Only have", len(m.txs))
+		m.mu.Unlock()
+		time.Sleep(time.Second)
+		m.mu.Lock()
+	}
+	m.mu.Unlock()
+	txn1 := m.Dequeue()
+
+	return []*broadcasted.BroadcastedTransaction{txn1}
+}

@@ -106,7 +106,8 @@ func (b *Builder) storeGenesisBlockAndState() error {
 		panic(fmt.Errorf("adapt udc class: %v", err))
 	}
 
-	testAddress := hexToFelt("0x1e2c7993e66844e4ac957632aec284d5e10832e1e9641ea5f4bd6bdc6342a32")
+	testAddress := hexToFelt("0x2")
+	testAddress2 := hexToFelt("0x8e1d0e590bff38a8f2bdee751a63d7d9d964bf034271ca369abfb9756ed253")
 
 	defaultPrefundedAccountBalance, err := new(felt.Felt).SetString("0x3635c9adc5dea00000") // 10^21
 	if err != nil {
@@ -162,8 +163,12 @@ func (b *Builder) storeGenesisBlockAndState() error {
 					{Key: erc20SymbolStorageSlot, Value: hexToFelt("0x455448")},
 					{Key: erc20DecimalsStorageSlot, Value: new(felt.Felt).SetUint64(18)},
 					{Key: getStorageVarAddress("ERC20_balances", testAddress), Value: defaultPrefundedAccountBalance},
+					{Key: getStorageVarAddress("ERC20_balances", testAddress2), Value: defaultPrefundedAccountBalance},
 				},
 				*testAddress: {
+					{Key: hexToFelt("0x01379ac0624b939ceb9dede92211d7db5ee174fe28be72245b0a1a2abd81c98f"), Value: hexToFelt("0x043661740237e2be32500042dbd2afda8ab94ad11d6cea9da379ee5de3d376a2")},
+				},
+				*testAddress2: {
 					{Key: hexToFelt("0x01379ac0624b939ceb9dede92211d7db5ee174fe28be72245b0a1a2abd81c98f"), Value: hexToFelt("0x043661740237e2be32500042dbd2afda8ab94ad11d6cea9da379ee5de3d376a2")},
 				},
 			},
@@ -171,11 +176,13 @@ func (b *Builder) storeGenesisBlockAndState() error {
 				*feeTokenAddress: new(felt.Felt).SetUint64(1),
 				*udcAddress:      new(felt.Felt).SetUint64(1),
 				*testAddress:     new(felt.Felt).SetUint64(1),
+				*testAddress2:    new(felt.Felt).SetUint64(1),
 			},
 			DeployedContracts: []core.AddressClassHashPair{
 				{Address: feeTokenAddress, ClassHash: erc20ClassHash},
 				{Address: udcAddress, ClassHash: udcClassHash},
 				{Address: testAddress, ClassHash: accountClassHash},
+				{Address: testAddress2, ClassHash: accountClassHash},
 			},
 			DeclaredV0Classes: []*felt.Felt{accountClassHash, erc20ClassHash, udcClassHash}, // Doesn't do anything.
 			DeclaredV1Classes: []core.DeclaredV1Class{},
@@ -211,7 +218,8 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("heads header: %v", err)
 		}
 
-		txns := b.mempool.WaitForTwoTransactions()
+		txns := b.mempool.WaitForOneTransactions()
+		// txns := b.mempool.WaitForTwoTransactions()
 		fmt.Println("--- Now I have two transactions. Time to execute and build.")
 		// Adapt transactions to core type
 		tx1, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txns[0], b.chain.Network())
@@ -233,25 +241,23 @@ func (b *Builder) Run(ctx context.Context) error {
 		}
 
 		// Adapt transactions to core type
-		tx2, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txns[1], b.chain.Network())
-		if err != nil {
-			return fmt.Errorf("adapt broadcasted transaction: %v", err)
-		}
-		switch class.(type) {
-		case *core.Cairo0Class, *core.Cairo1Class:
-			classes = append(classes, class)
-		}
-		switch snTx := tx2.(type) {
-		case *core.L1HandlerTransaction:
-			paidFeesOnL1 = append(paidFeesOnL1, paidFeeOnL1)
-		case *core.DeclareTransaction:
-			declaredClasses[*snTx.ClassHash] = class
-		}
+		// tx2, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txns[1], b.chain.Network())
+		// if err != nil {
+		// 	return fmt.Errorf("adapt broadcasted transaction: %v", err)
+		// }
+		// switch class.(type) {
+		// case *core.Cairo0Class, *core.Cairo1Class:
+		// 	classes = append(classes, class)
+		// }
+		// switch snTx := tx2.(type) {
+		// case *core.L1HandlerTransaction:
+		// 	paidFeesOnL1 = append(paidFeesOnL1, paidFeeOnL1)
+		// case *core.DeclareTransaction:
+		// 	declaredClasses[*snTx.ClassHash] = class
+		// }
 
 		// Build up the header
-		singleReceipt := []*core.TransactionReceipt{{
-			TransactionHash: tx2.Hash(),
-		}}
+		singleReceipt := []*core.TransactionReceipt{{}}
 		pendingHeader := &core.Header{
 			ParentHash:       curHeader.Hash,
 			Number:           curHeader.Number + 1,
@@ -265,7 +271,7 @@ func (b *Builder) Run(ctx context.Context) error {
 			EventsBloom:      core.EventsBloom(singleReceipt), // TODO
 		}
 
-		txs := []core.Transaction{tx1, tx2}
+		txs := []core.Transaction{tx1}
 		stateReader, stateCloser, err := b.chain.HeadState()
 		if err != nil {
 			return fmt.Errorf("head state: %v", err)
@@ -277,9 +283,10 @@ func (b *Builder) Run(ctx context.Context) error {
 		_, traces, err := b.starknetVM.Execute(txs, classes, pendingHeader.Number, pendingHeader.Timestamp, pendingHeader.SequencerAddress, stateReader, b.chain.Network(), paidFeesOnL1, false, new(felt.Felt), false)
 		stateCloser()
 		if err != nil {
+			fmt.Println("=== Execution Failed")
 			return fmt.Errorf("execute transaction: %v", err)
 		}
-
+		fmt.Println("=== Execution Succeeded")
 		tStateDiffs := make([]*core.StateDiff, len(traces))
 		for i, trace := range traces {
 			if tStateDiffs[i], err = vm2core.TraceToStateDiff(trace); err != nil {
@@ -287,6 +294,9 @@ func (b *Builder) Run(ctx context.Context) error {
 			}
 		}
 		mergedStateDiffs, err := mergeStateDiffs(tStateDiffs)
+		fmt.Println("---")
+		fmt.Println(vm2core.TraceToStateDiff(traces[0]))
+		fmt.Println(mergedStateDiffs)
 
 		block := &core.Block{
 			Header:       pendingHeader,
@@ -298,6 +308,7 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("block hash: %v", err)
 		}
 		block.Hash = blockHash
+		fmt.Println("=== About to call b.chain.Store()")
 		if err = b.chain.Store(block, commitments, &core.StateUpdate{
 			BlockHash: blockHash,
 			// TODO. There isn't a good way to get this when we're sequencing. We need to refactor core/state.go and core/state_update.go.
@@ -309,7 +320,6 @@ func (b *Builder) Run(ctx context.Context) error {
 		}
 		fmt.Printf("stored block %d\n", block.Number)
 		fmt.Printf("  transaction 1 hash: %s\n", tx1.Hash())
-		fmt.Printf("  transaction 2 hash: %s\n", tx2.Hash())
 	}
 	return nil
 }

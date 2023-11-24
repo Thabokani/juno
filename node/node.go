@@ -108,13 +108,13 @@ func New(cfg *Config, version string) (*Node, error) { //nolint:gocyclo,funlen
 	chain := blockchain.New(database, cfg.Network, log)
 
 	mpool := mempool.New()
-	blockbuilder:= blockbuilder.New(chain,vm.New(log), mpool)
+	blockbuilder := blockbuilder.New(chain, vm.New(log), mpool)
 	services = append(services, blockbuilder)
 
 	feederClientTimeout := 5 * time.Second
 	client := feeder.NewClient(cfg.Network.FeederURL()).WithUserAgent(ua).WithLogger(log).WithTimeout(feederClientTimeout)
 	synchronizer := sync.New(chain, adaptfeeder.New(client), log, cfg.PendingPollInterval, true)
-	services = append(services, synchronizer)
+	// services = append(services, synchronizer)
 	gatewayClient := gateway.NewClient(cfg.Network.GatewayURL(), log).WithUserAgent(ua)
 
 	throttledVM := NewThrottledVM(vm.New(log), cfg.MaxVMs, int32(cfg.MaxVMs))

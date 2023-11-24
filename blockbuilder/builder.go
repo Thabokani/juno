@@ -106,7 +106,7 @@ func (b *Builder) storeGenesisBlockAndState() error {
 		panic(fmt.Errorf("adapt udc class: %v", err))
 	}
 
-	testAddress := hexToFelt("0x2")
+	testAddress := hexToFelt("0x1e2c7993e66844e4ac957632aec284d5e10832e1e9641ea5f4bd6bdc6342a32")
 
 	defaultPrefundedAccountBalance, err := new(felt.Felt).SetString("0x3635c9adc5dea00000") // 10^21
 	if err != nil {
@@ -194,6 +194,7 @@ func (b *Builder) storeGenesisBlockAndState() error {
 
 // Run(ctx context.Context) defines blockbuilder as a Service.Service
 func (b *Builder) Run(ctx context.Context) error {
+	fmt.Println("======= RUN ")
 	if _, err := b.chain.Height(); err != nil {
 		if !errors.Is(err, db.ErrKeyNotFound) {
 			return fmt.Errorf("chain height: %v", err)
@@ -211,7 +212,7 @@ func (b *Builder) Run(ctx context.Context) error {
 		}
 
 		txns := b.mempool.WaitForTwoTransactions()
-
+		fmt.Println("--- Now I have two transactions. Time to execute and build.")
 		// Adapt transactions to core type
 		tx1, class, paidFeeOnL1, err := broadcasted.AdaptBroadcastedTransaction(txns[0], b.chain.Network())
 		if err != nil {

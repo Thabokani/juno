@@ -1,6 +1,7 @@
 package mempool
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -39,15 +40,14 @@ func (m *Mempool) Dequeue() *broadcasted.BroadcastedTransaction {
 
 func (m *Mempool) WaitForTwoTransactions() []*broadcasted.BroadcastedTransaction {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	for len(m.txs) < 2 {
+		fmt.Println("-- waiting for 2 txns. Only have", len(m.txs))
 		m.mu.Unlock()
 		time.Sleep(time.Second)
 		m.mu.Lock()
 	}
+	m.mu.Unlock()
 	txn1 := m.Dequeue()
 	txn2 := m.Dequeue()
-
 	return []*broadcasted.BroadcastedTransaction{txn1, txn2}
 }

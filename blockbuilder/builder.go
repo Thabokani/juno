@@ -279,7 +279,13 @@ func (b *Builder) Run(ctx context.Context) error {
 			return fmt.Errorf("execute transaction: %v", err)
 		}
 
-		mergedStateDiffs, err := mergeStateDiffs(traces)
+		tStateDiffs := make([]*core.StateDiff, len(traces))
+		for i, trace := range traces {
+			if tStateDiffs[i], err = vm2core.TraceToStateDiff(trace); err != nil {
+				return err
+			}
+		}
+		mergedStateDiffs, err := mergeStateDiffs(tStateDiffs)
 
 		block := &core.Block{
 			Header:       pendingHeader,
@@ -329,7 +335,7 @@ starkli deploy --account myaccount 0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36
 */
 
 // TODO: This is not efficient, we should update *core.StateDiff
-func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
+func mergeStateDiffs(tStateDiffs []*core.StateDiff) (*core.StateDiff, error) {
 	mergedStateDiff := &core.StateDiff{
 		StorageDiffs:      make(map[felt.Felt][]core.StorageDiff),
 		Nonces:            make(map[felt.Felt]*felt.Felt),
@@ -339,13 +345,8 @@ func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 		ReplacedClasses:   make([]core.AddressClassHashPair, 0),
 	}
 
-	for _, trace := range traces {
-		traceStateDiff, err := vm2core.TraceToStateDiff(trace)
-		if err != nil {
-			return nil, fmt.Errorf("trace to state diff: %v", err)
-		}
-
-		for newAddr, newStorageDiffs := range traceStateDiff.StorageDiffs {
+	for _, tStateDiff := range tStateDiffs {
+		for newAddr, newStorageDiffs := range tStateDiff.StorageDiffs {
 			if mergedStateDiff.StorageDiffs[newAddr] == nil {
 				mergedStateDiff.StorageDiffs[newAddr] = append(mergedStateDiff.StorageDiffs[newAddr], newStorageDiffs...)
 			} else {
@@ -366,12 +367,12 @@ func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 		}
 
 		// Nonces
-		for tAddr, tNonce := range traceStateDiff.Nonces {
+		for tAddr, tNonce := range tStateDiff.Nonces {
 			mergedStateDiff.Nonces[tAddr] = tNonce
 		}
 
 		// Deployed contracts
-		for _, tAddressClashHashPair := range traceStateDiff.DeployedContracts {
+		for _, tAddressClashHashPair := range tStateDiff.DeployedContracts {
 			if mergedStateDiff.DeployedContracts == nil {
 				mergedStateDiff.DeployedContracts = append(mergedStateDiff.DeployedContracts, tAddressClashHashPair)
 			} else {
@@ -389,7 +390,7 @@ func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 		}
 
 		// DeclaredV0 classes
-		for _, tClassHash := range traceStateDiff.DeclaredV0Classes {
+		for _, tClassHash := range tStateDiff.DeclaredV0Classes {
 			alreadyExists := false
 			for _, mergedClassHash := range mergedStateDiff.DeclaredV0Classes {
 				if mergedClassHash.Cmp(tClassHash) == 0 {
@@ -403,7 +404,7 @@ func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 		}
 
 		// DeclaredV1 classes
-		for _, tClass := range traceStateDiff.DeclaredV1Classes {
+		for _, tClass := range tStateDiff.DeclaredV1Classes {
 			alreadyExists := false
 			for _, mergedClass := range mergedStateDiff.DeclaredV1Classes {
 				if mergedClass.ClassHash.Cmp(tClass.ClassHash) == 0 && mergedClass.CompiledClassHash.Cmp(tClass.CompiledClassHash) == 0 {
@@ -417,7 +418,7 @@ func mergeStateDiffs(traces []json.RawMessage) (*core.StateDiff, error) {
 		}
 
 		// Replaced classes
-		for _, tAddressClassHashPair := range traceStateDiff.ReplacedClasses {
+		for _, tAddressClassHashPair := range tStateDiff.ReplacedClasses {
 			alreadyExists := false
 			for _, mergedAddressClassHashPair := range mergedStateDiff.ReplacedClasses {
 				if mergedAddressClassHashPair.Address.Cmp(tAddressClassHashPair.Address) == 0 && mergedAddressClassHashPair.ClassHash.Cmp(tAddressClassHashPair.ClassHash) == 0 {

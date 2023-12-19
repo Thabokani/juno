@@ -1,6 +1,7 @@
 package pebble
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 
@@ -31,10 +32,15 @@ func New(path string, cache uint, logger pebble.Logger) (db.DB, error) {
 		cache = minCache
 	}
 	pDB, err := newPebble(path, &pebble.Options{
-		Logger:       logger,
-		Cache:        pebble.NewCache(int64(cache * megabyte)),
-		MaxOpenFiles: 20000,
-	})
+		Logger:                      logger,
+		Cache:                       pebble.NewCache(int64(cache * megabyte)),
+		MaxOpenFiles:                10000,
+		MemTableSize:                128,
+		MemTableStopWritesThreshold: 4,
+		MaxConcurrentCompactions: func() int {
+			return runtime.GOMAXPROCS(0)
+		}})
+
 	if err != nil {
 		return nil, err
 	}

@@ -33,7 +33,7 @@ func New(path string, cache uint, logger pebble.Logger) (db.DB, error) {
 	pDB, err := newPebble(path, &pebble.Options{
 		Logger:       logger,
 		Cache:        pebble.NewCache(int64(cache * megabyte)),
-		MaxOpenFiles: 10000,
+		MaxOpenFiles: 20000,
 	})
 	if err != nil {
 		return nil, err

@@ -21,6 +21,7 @@ import (
 	"github.com/NethermindEth/juno/db"
 	"github.com/NethermindEth/juno/feed"
 	"github.com/NethermindEth/juno/jsonrpc"
+	"github.com/NethermindEth/juno/mempool"
 	"github.com/NethermindEth/juno/starknet"
 	"github.com/NethermindEth/juno/sync"
 	"github.com/NethermindEth/juno/utils"
@@ -88,6 +89,7 @@ type Handler struct {
 	vm            vm.VM
 	log           utils.Logger
 	version       string
+	pool          *mempool.Pool
 
 	newHeads *feed.Feed[*core.Header]
 
@@ -108,10 +110,12 @@ type subscription struct {
 
 func New(bcReader blockchain.Reader, syncReader sync.Reader, n utils.Network,
 	gatewayClient Gateway, feederClient *feeder.Client, virtualMachine vm.VM, version string, logger utils.Logger,
+	mpool *mempool.Pool,
 ) *Handler {
 	return &Handler{
 		bcReader:      bcReader,
 		syncReader:    syncReader,
+		pool:          mpool,
 		network:       n,
 		log:           logger,
 		feederClient:  feederClient,
@@ -1763,6 +1767,27 @@ func (h *Handler) unsubscribe(sub *subscription, id uint64) {
 	h.mu.Lock()
 	delete(h.subscriptions, id)
 	h.mu.Unlock()
+}
+
+func (h *Handler) AddMsgFromL1(msg core.L1ToL2Message) *jsonrpc.Error {
+	tx := &core.L1HandlerTransaction{
+		ContractAddress:    msg.To,
+		EntryPointSelector: msg.Selector,
+		Nonce:              msg.Nonce,
+		CallData:           msg.Payload,
+		Version:            new(core.TransactionVersion),
+	}
+	var err error
+	tx.TransactionHash, err = core.TransactionHash(tx, h.network)
+	if err != nil {
+		return ErrInternal.CloneWithData(err)
+	}
+	if err := h.pool.Push(&mempool.BroadcastedTransaction{
+		Transaction: tx,
+	}); err != nil {
+		return ErrInternal.CloneWithData(err)
+	}
+	return nil
 }
 
 func (h *Handler) Methods() ([]jsonrpc.Method, string) { //nolint: funlen

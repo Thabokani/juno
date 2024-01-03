@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/NethermindEth/juno/core"
@@ -937,22 +938,27 @@ func removeTxsAndReceipts(txn db.Transaction, blockNumber, numTxs uint64) error 
 }
 
 func (b *Blockchain) storeEmptyPending(txn db.Transaction, latestHeader *core.Header) error {
+	return b.storeNewPending(txn, &core.Header{
+		Number:           latestHeader.Number + 1,
+		ParentHash:       latestHeader.Hash,
+		SequencerAddress: latestHeader.SequencerAddress,
+		Timestamp:        latestHeader.Timestamp + 1,
+		ProtocolVersion:  latestHeader.ProtocolVersion,
+		GasPrice:         latestHeader.GasPrice,
+		GasPriceSTRK:     latestHeader.GasPriceSTRK,
+	}, latestHeader.GlobalStateRoot)
+}
+
+func (b *Blockchain) storeNewPending(txn db.Transaction, pendingHeader *core.Header, oldRoot *felt.Felt) error {
 	receipts := make([]*core.TransactionReceipt, 0)
+	pendingHeader.EventsBloom = core.EventsBloom(receipts)
 	pendingBlock := &core.Block{
-		Header: &core.Header{
-			ParentHash:       latestHeader.Hash,
-			SequencerAddress: latestHeader.SequencerAddress,
-			Timestamp:        latestHeader.Timestamp + 1,
-			ProtocolVersion:  latestHeader.ProtocolVersion,
-			EventsBloom:      core.EventsBloom(receipts),
-			GasPrice:         latestHeader.GasPrice,
-			GasPriceSTRK:     latestHeader.GasPriceSTRK,
-		},
+		Header:       pendingHeader,
 		Transactions: make([]core.Transaction, 0),
 		Receipts:     receipts,
 	}
 
-	stateDiff, err := MakeStateDiffForEmptyBlock(b, latestHeader.Number+1)
+	stateDiff, err := MakeStateDiffForEmptyBlock(b, pendingHeader.Number)
 	if err != nil {
 		return err
 	}
@@ -960,7 +966,7 @@ func (b *Blockchain) storeEmptyPending(txn db.Transaction, latestHeader *core.He
 	emptyPending := &Pending{
 		Block: pendingBlock,
 		StateUpdate: &core.StateUpdate{
-			OldRoot:   latestHeader.GlobalStateRoot,
+			OldRoot:   oldRoot,
 			StateDiff: stateDiff,
 		},
 		NewClasses: make(map[felt.Felt]core.Class, 0),
@@ -1189,6 +1195,17 @@ func (b *Blockchain) InitGenesisState(stateDiff *core.StateDiff, classes map[fel
 			return err
 		}
 
-		return txn.Set(db.GenesisState.Key(), genesisStateUpdateBytes)
+		if err = txn.Set(db.GenesisState.Key(), genesisStateUpdateBytes); err != nil {
+			return err
+		}
+
+		return b.storeNewPending(txn, &core.Header{
+			ParentHash:       &felt.Zero,
+			SequencerAddress: &felt.Zero,
+			Timestamp:        uint64(time.Now().Unix()),
+			ProtocolVersion:  supportedStarknetVersion.Original(),
+			GasPrice:         &felt.Zero,
+			GasPriceSTRK:     &felt.Zero,
+		}, genesisRoot)
 	})
 }

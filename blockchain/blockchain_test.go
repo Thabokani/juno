@@ -888,4 +888,8 @@ func TestGenesis(t *testing.T) {
 		NewRoot:   utils.HexToFelt(t, "0x74d338d85a1e9354bdc6cf6902d93b2784ec0f3f06363e8f059ec53658ac39d"),
 		StateDiff: &genesisDiff,
 	}, genesisUpdate)
+
+	pendingBlock, err := chain.Pending()
+	require.NoError(t, err)
+	require.Equal(t, genesisUpdate.NewRoot, pendingBlock.StateUpdate.OldRoot)
 }

@@ -3,6 +3,8 @@ package builder
 import (
 	"context"
 	"errors"
+	stdsync "sync"
+	"time"
 
 	"github.com/NethermindEth/juno/adapters/vm2core"
 	"github.com/NethermindEth/juno/blockchain"
@@ -32,6 +34,11 @@ type Builder struct {
 	vm       vm.VM
 	newHeads *feed.Feed[*core.Header]
 	log      utils.Logger
+
+	pendingLock  stdsync.Mutex
+	pendingBlock blockchain.Pending
+	headState    core.StateReader
+	headCloser   blockchain.StateCloser
 }
 
 func New(privKey *ecdsa.PrivateKey, ownAddr *felt.Felt, bc *blockchain.Blockchain, builderVM vm.VM, log utils.Logger) *Builder {
@@ -42,12 +49,76 @@ func New(privKey *ecdsa.PrivateKey, ownAddr *felt.Felt, bc *blockchain.Blockchai
 		bc:       bc,
 		vm:       builderVM,
 		newHeads: feed.New[*core.Header](),
+		log:      log,
 	}
 }
 
 func (b *Builder) Run(ctx context.Context) error {
-	<-ctx.Done()
+	if err := b.initPendingBlock(); err != nil {
+		return err
+	}
+	defer b.clearPending()
+
+	const blockTime = 5 * time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(blockTime):
+			if err := b.Finalise(); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (b *Builder) initPendingBlock() error {
+	if b.pendingBlock.Block != nil {
+		return nil
+	}
+
+	bcPending, err := b.bc.Pending()
+	if err != nil {
+		return err
+	}
+
+	b.pendingBlock, err = utils.Clone[blockchain.Pending](bcPending)
+	if err != nil {
+		return err
+	}
+	b.pendingBlock.Block.SequencerAddress = &b.ownAddress
+
+	b.headState, b.headCloser, err = b.bc.HeadState()
+	return err
+}
+
+func (b *Builder) clearPending() error {
+	b.pendingBlock = blockchain.Pending{}
+	if b.headState != nil {
+		if err := b.headCloser(); err != nil {
+			return err
+		}
+		b.headState = nil
+		b.headCloser = nil
+	}
 	return nil
+}
+
+// Finalise the pending block and initialise the next one
+func (b *Builder) Finalise() error {
+	b.pendingLock.Lock()
+	defer b.pendingLock.Unlock()
+
+	if err := b.bc.Finalise(&b.pendingBlock, b.Sign); err != nil {
+		return err
+	}
+	b.log.Infow("Finalised block", "number", b.pendingBlock.Block.Number, "hash",
+		b.pendingBlock.Block.Hash.ShortString(), "state", b.pendingBlock.Block.GlobalStateRoot.ShortString())
+
+	if err := b.clearPending(); err != nil {
+		return err
+	}
+	return b.initPendingBlock()
 }
 
 // ValidateAgainstPendingState validates a user transaction against the pending state

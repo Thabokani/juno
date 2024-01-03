@@ -30,7 +30,8 @@ func TestValidateAgainstPendingState(t *testing.T) {
 	mockVM := mocks.NewMockVM(mockCtrl)
 	bc := blockchain.New(testDB, utils.Integration, utils.NewNopZapLogger())
 	seqAddr := utils.HexToFelt(t, "0xDEADBEEF")
-	testBuilder := builder.New(nil, seqAddr, bc, mockVM, utils.NewNopZapLogger())
+	p := mempool.New(pebble.NewMemTest(t))
+	testBuilder := builder.New(nil, seqAddr, bc, p, mockVM, utils.NewNopZapLogger())
 
 	client := feeder.NewTestClient(t, utils.Integration)
 	gw := adaptfeeder.New(client)
@@ -74,7 +75,8 @@ func TestSign(t *testing.T) {
 	seqAddr := utils.HexToFelt(t, "0xDEADBEEF")
 	privKey, err := ecdsa.GenerateKey(rand.Reader)
 	require.NoError(t, err)
-	testBuilder := builder.New(privKey, seqAddr, bc, mockVM, utils.NewNopZapLogger())
+	p := mempool.New(pebble.NewMemTest(t))
+	testBuilder := builder.New(privKey, seqAddr, bc, p, mockVM, utils.NewNopZapLogger())
 
 	_, err = testBuilder.Sign(new(felt.Felt), new(felt.Felt))
 	require.NoError(t, err)

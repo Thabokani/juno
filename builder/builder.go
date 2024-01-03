@@ -31,6 +31,7 @@ type Builder struct {
 	privKey    *ecdsa.PrivateKey
 
 	bc       *blockchain.Blockchain
+	pool     *mempool.Pool
 	vm       vm.VM
 	newHeads *feed.Feed[*core.Header]
 	log      utils.Logger
@@ -41,12 +42,13 @@ type Builder struct {
 	headCloser   blockchain.StateCloser
 }
 
-func New(privKey *ecdsa.PrivateKey, ownAddr *felt.Felt, bc *blockchain.Blockchain, builderVM vm.VM, log utils.Logger) *Builder {
+func New(privKey *ecdsa.PrivateKey, ownAddr *felt.Felt, bc *blockchain.Blockchain, pool *mempool.Pool, builderVM vm.VM, log utils.Logger) *Builder {
 	return &Builder{
 		ownAddress: *ownAddr,
 		privKey:    privKey,
 
 		bc:       bc,
+		pool:     pool,
 		vm:       builderVM,
 		newHeads: feed.New[*core.Header](),
 		log:      log,
@@ -58,6 +60,8 @@ func (b *Builder) Run(ctx context.Context) error {
 		return err
 	}
 	defer b.clearPending()
+
+	go b.listenPool(ctx)
 
 	const blockTime = 5 * time.Second
 	for {
@@ -202,4 +206,77 @@ func Receipt(fee *felt.Felt, feeUnit core.FeeUnit, txHash *felt.Felt, trace *vm.
 		Reverted:           trace.IsReverted(),
 		RevertReason:       trace.RevertReason(),
 	}
+}
+
+func (b *Builder) listenPool(ctx context.Context) error {
+	for {
+		if err := b.depletePool(ctx); err != nil {
+			if !errors.Is(err, db.ErrKeyNotFound) {
+				return err
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-b.pool.Wait():
+			continue
+		}
+	}
+}
+
+func (b *Builder) depletePool(ctx context.Context) error {
+	for {
+		userTxn, err := b.pool.Pop()
+		if err != nil {
+			return err
+		}
+		b.log.Debugw("running txn", "hash", userTxn.Transaction.Hash().String())
+
+		if err = b.runTxn(&userTxn); err != nil {
+			var txnExecutionError vm.TransactionExecutionError
+			if !errors.As(err, &txnExecutionError) {
+				return err
+			}
+
+			b.log.Debugw("failed txn", "hash", userTxn.Transaction.Hash().String(), "err", err.Error())
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+	}
+}
+
+func (b *Builder) runTxn(txn *mempool.BroadcastedTransaction) error {
+	b.pendingLock.Lock()
+	defer b.pendingLock.Unlock()
+
+	state := blockchain.NewPendingState(b.pendingBlock.StateUpdate.StateDiff, b.pendingBlock.NewClasses, b.headState)
+	var classes []core.Class
+	if txn.DeclaredClass != nil {
+		classes = append(classes, txn.DeclaredClass)
+	}
+
+	fee, trace, err := b.vm.Execute([]core.Transaction{txn.Transaction}, classes, b.pendingBlock.Block.Number,
+		b.pendingBlock.Block.Timestamp, b.pendingBlock.Block.SequencerAddress, state, b.bc.Network(),
+		make([]*felt.Felt, 0), false, false, false, b.pendingBlock.Block.GasPrice, b.pendingBlock.Block.GasPriceSTRK, false)
+	if err != nil {
+		return err
+	}
+
+	b.pendingBlock.Block.Transactions = append(b.pendingBlock.Block.Transactions, txn.Transaction)
+	b.pendingBlock.Block.TransactionCount = uint64(len(b.pendingBlock.Block.Transactions))
+
+	feeUnit := core.WEI
+	if txn.Transaction.TxVersion().Is(3) {
+		feeUnit = core.STRK
+	}
+
+	receipt := Receipt(fee[0], feeUnit, txn.Transaction.Hash(), &trace[0])
+	b.pendingBlock.Block.Receipts = append(b.pendingBlock.Block.Receipts, receipt)
+	b.pendingBlock.Block.EventCount += uint64(len(receipt.Events))
+	return nil
 }

@@ -275,6 +275,7 @@ func TestSetCompiledClassHash(t *testing.T) {
 
 func TestStateDiff(t *testing.T) {
 	state := makeState(t)
-	got := state.StateDiff()
-	require.Equal(t, core.EmptyStateDiff(), got)
+	gotSD, gotC := state.StateDiff()
+	require.Equal(t, core.EmptyStateDiff(), gotSD)
+	require.Equal(t, 0, len(gotC))
 }

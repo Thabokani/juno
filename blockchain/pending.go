@@ -122,6 +122,6 @@ func (p *PendingState) SetCompiledClassHash(classHash, compiledClassHash *felt.F
 
 // StateDiff returns the pending state's internal state diff. The returned object will continue to be
 // read and modified by the pending state.
-func (p *PendingState) StateDiff() *core.StateDiff {
-	return p.stateDiff
+func (p *PendingState) StateDiff() (*core.StateDiff, map[felt.Felt]core.Class) {
+	return p.stateDiff, p.newClasses
 }

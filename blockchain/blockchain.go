@@ -1145,50 +1145,54 @@ func (b *Blockchain) Finalise(pending *Pending, sign BlockSignFunc) error {
 	})
 }
 
-func (b *Blockchain) GenesisState() (*core.StateUpdate, error) {
-	var genesisStateUpdate *core.StateUpdate
-	return genesisStateUpdate, b.database.View(func(txn db.Transaction) error {
-		var err error
-		genesisStateUpdate, err = genesisState(txn)
-		return err
-	})
-}
+func (b *Blockchain) StoreGenesis(diff *core.StateDiff, classes map[felt.Felt]core.Class) error {
+	receipts := make([]*core.TransactionReceipt, 0)
+	block := &core.Block{
+		Header: &core.Header{
+			Hash:             nil, // Set below.
+			ParentHash:       new(felt.Felt),
+			Number:           0,
+			GlobalStateRoot:  nil, // Set below.
+			SequencerAddress: new(felt.Felt),
+			TransactionCount: 0,
+			EventCount:       0,
+			Timestamp:        0,
+			ProtocolVersion:  "", // Not set.
+			EventsBloom:      core.EventsBloom(receipts),
+			GasPrice:         new(felt.Felt),
+			Signatures:       make([][]*felt.Felt, 0),
+			GasPriceSTRK:     new(felt.Felt),
+		},
+		Transactions: make([]core.Transaction, 0),
+		Receipts:     receipts,
+	}
 
-func genesisState(txn db.Transaction) (*core.StateUpdate, error) {
-	var genesisStateUpdate *core.StateUpdate
-	return genesisStateUpdate, txn.Get(db.GenesisState.Key(), func(b []byte) error {
-		genesisStateUpdate = new(core.StateUpdate)
-		return encoder.Unmarshal(b, genesisStateUpdate)
-	})
-}
-
-func (b *Blockchain) InitGenesisState(stateDiff *core.StateDiff, classes map[felt.Felt]core.Class) error {
 	return b.database.Update(func(txn db.Transaction) error {
-		_, err := genesisState(txn)
-		if !errors.Is(err, db.ErrKeyNotFound) {
-			return errors.New("genesis state already initiliazed")
-		}
-
 		state := core.NewState(txn)
-		if err = state.Update(0, stateDiff, classes); err != nil {
+		if err := state.Update(0, diff, classes); err != nil {
 			return err
 		}
 
-		genesisRoot, err := state.Root()
+		root, err := state.Root()
+		if err != nil {
+			return err
+		}
+		block.GlobalStateRoot = root
+
+		var commitments *core.BlockCommitments
+		block.Hash, commitments, err = core.BlockHash(block, b.network)
 		if err != nil {
 			return err
 		}
 
-		genesisStateUpdateBytes, err := encoder.Marshal(core.StateUpdate{
-			BlockHash: &felt.Zero,
-			OldRoot:   &felt.Zero,
-			NewRoot:   genesisRoot,
-			StateDiff: stateDiff,
-		})
-		if err != nil {
+		if err = storeStateUpdate(txn, 0, &core.StateUpdate{
+			BlockHash: block.Hash,
+			NewRoot:   root,
+			OldRoot:   new(felt.Felt),
+			StateDiff: diff,
+		}); err != nil {
 			return err
 		}
-
-		return txn.Set(db.GenesisState.Key(), genesisStateUpdateBytes)
+		return b.storeBlock(txn, block, commitments)
 	})
 }

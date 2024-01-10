@@ -24,7 +24,7 @@
   <a href="https://discord.gg/TcHbSZ9ATd">
     <img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white">
   </a>
-  <a href="https://twitter.com/nethermindeth?s=20&t=xLC_xrid_f17DJqdJ2EZnA">
+  <a href="https://twitter.com/NethermindStark">
     <img src="https://img.shields.io/badge/Twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white">
   </a>
   <a href="https://t.me/+skAz9cUvo_AzZWM8">

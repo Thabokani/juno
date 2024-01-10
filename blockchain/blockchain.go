@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/NethermindEth/juno/core"
@@ -1099,100 +1100,98 @@ type BlockSignFunc func(blockHash, stateDiffCommitment *felt.Felt) ([]*felt.Felt
 
 // Finalise will calculate the state commitment and block hash for the given pending block and append it to the
 // blockchain
-func (b *Blockchain) Finalise(pending *Pending, sign BlockSignFunc) error {
+func (b *Blockchain) Finalise(txs []core.Transaction, receipts []*core.TransactionReceipt, diff *core.StateDiff,
+	classes map[felt.Felt]core.Class, seqAddr *felt.Felt, sign BlockSignFunc,
+) error {
 	return b.database.Update(func(txn db.Transaction) error {
-		var err error
-
-		state := core.NewState(txn)
-		pending.StateUpdate.OldRoot, err = state.Root()
+		pending, err := pendingBlock(txn)
 		if err != nil {
 			return err
 		}
 
-		if h, hErr := chainHeight(txn); hErr == nil {
-			pending.Block.Number = h + 1
-		}
-
-		if err = state.Update(pending.Block.Number, pending.StateUpdate.StateDiff, pending.NewClasses); err != nil {
-			return err
-		}
-
-		pending.Block.GlobalStateRoot, err = state.Root()
+		// TODO we can avoid this disk read by storing the pending block's number
+		// in storeEmptyPending. That will require some refactoring in the rpc
+		// package to do correctly.
+		height, err := chainHeight(txn)
 		if err != nil {
 			return err
 		}
-		pending.StateUpdate.NewRoot = pending.Block.GlobalStateRoot
-
-		var commitments *core.BlockCommitments
-		pending.Block.Hash, commitments, err = core.BlockHash(pending.Block, b.network)
-		if err != nil {
-			return err
+		pending.Block.Number = height + 1
+		pending.Block.SequencerAddress = seqAddr
+		pending.Block.Transactions = txs
+		pending.Block.TransactionCount = uint64(len(txs))
+		pending.Block.Receipts = receipts
+		for _, receipt := range receipts {
+			pending.Block.EventCount += uint64(len(receipt.Events))
 		}
-		pending.StateUpdate.BlockHash = pending.Block.Hash
+		pending.Block.EventsBloom = core.EventsBloom(receipts)
+		pending.Block.Timestamp = uint64(time.Now().Unix())
+		pending.Block.ProtocolVersion = supportedStarknetVersion.String()
+		// TODO gas prices
+		pending.StateUpdate.StateDiff = diff
+		pending.NewClasses = classes
 
-		var sig []*felt.Felt
-		sig, err = sign(pending.Block.Hash, pending.StateUpdate.StateDiff.Commitment())
-		if err != nil {
-			return err
-		}
-		pending.Block.Signatures = [][]*felt.Felt{sig}
-
-		if err = b.storeBlock(txn, pending.Block, commitments); err != nil {
-			return err
-		}
-
-		return storeStateUpdate(txn, pending.Block.Number, pending.StateUpdate)
+		return b.finalise(txn, &pending, sign)
 	})
 }
 
 func (b *Blockchain) StoreGenesis(diff *core.StateDiff, classes map[felt.Felt]core.Class) error {
 	receipts := make([]*core.TransactionReceipt, 0)
-	block := &core.Block{
-		Header: &core.Header{
-			Hash:             nil, // Set below.
-			ParentHash:       new(felt.Felt),
-			Number:           0,
-			GlobalStateRoot:  nil, // Set below.
-			SequencerAddress: new(felt.Felt),
-			TransactionCount: 0,
-			EventCount:       0,
-			Timestamp:        0,
-			ProtocolVersion:  "", // Not set.
-			EventsBloom:      core.EventsBloom(receipts),
-			GasPrice:         new(felt.Felt),
-			Signatures:       make([][]*felt.Felt, 0),
-			GasPriceSTRK:     new(felt.Felt),
+	pending := &Pending{
+		Block: &core.Block{
+			Header: &core.Header{
+				ParentHash:       new(felt.Felt),
+				SequencerAddress: new(felt.Felt),
+				ProtocolVersion:  "", // Not set.
+				EventsBloom:      core.EventsBloom(receipts),
+				GasPrice:         new(felt.Felt),
+				Signatures:       make([][]*felt.Felt, 0),
+				GasPriceSTRK:     new(felt.Felt),
+			},
+			Transactions: make([]core.Transaction, 0),
+			Receipts:     receipts,
 		},
-		Transactions: make([]core.Transaction, 0),
-		Receipts:     receipts,
+		StateUpdate: &core.StateUpdate{
+			StateDiff: diff,
+			OldRoot:   new(felt.Felt),
+		},
+		NewClasses: classes,
+	}
+	return b.database.Update(func(txn db.Transaction) error {
+		return b.finalise(txn, pending, func(_, _ *felt.Felt) ([]*felt.Felt, error) {
+			return []*felt.Felt{}, nil
+		})
+	})
+}
+
+func (b *Blockchain) finalise(txn db.Transaction, pending *Pending, sign BlockSignFunc) error {
+	state := core.NewState(txn)
+	if err := state.Update(pending.Block.Number, pending.StateUpdate.StateDiff, pending.NewClasses); err != nil {
+		return err
 	}
 
-	return b.database.Update(func(txn db.Transaction) error {
-		state := core.NewState(txn)
-		if err := state.Update(0, diff, classes); err != nil {
-			return err
-		}
+	var err error
+	pending.Block.GlobalStateRoot, err = state.Root()
+	if err != nil {
+		return err
+	}
+	pending.StateUpdate.NewRoot = pending.Block.GlobalStateRoot
 
-		root, err := state.Root()
-		if err != nil {
-			return err
-		}
-		block.GlobalStateRoot = root
+	var commitments *core.BlockCommitments
+	pending.Block.Hash, commitments, err = core.BlockHash(pending.Block, b.network)
+	if err != nil {
+		return err
+	}
+	pending.StateUpdate.BlockHash = pending.Block.Hash
 
-		var commitments *core.BlockCommitments
-		block.Hash, commitments, err = core.BlockHash(block, b.network)
-		if err != nil {
-			return err
-		}
+	sig, err := sign(pending.Block.Hash, pending.StateUpdate.StateDiff.Commitment())
+	if err != nil {
+		return err
+	}
+	pending.Block.Signatures = [][]*felt.Felt{sig}
 
-		if err = storeStateUpdate(txn, 0, &core.StateUpdate{
-			BlockHash: block.Hash,
-			NewRoot:   root,
-			OldRoot:   new(felt.Felt),
-			StateDiff: diff,
-		}); err != nil {
-			return err
-		}
-		return b.storeBlock(txn, block, commitments)
-	})
+	if err = b.storeBlock(txn, pending.Block, commitments); err != nil {
+		return err
+	}
+	return storeStateUpdate(txn, pending.Block.Number, pending.StateUpdate)
 }
